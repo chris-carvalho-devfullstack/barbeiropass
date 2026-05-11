@@ -14,8 +14,11 @@ export default function DashboardLayout({
         
         {/* O Conteúdo Principal */}
         <main className="flex-1 flex flex-col w-full overflow-hidden">
-          {/* O Topo (Header) com o botão de abrir/fechar o menu no mobile */}
-          <header className="flex h-16 shrink-0 items-center gap-4 border-b border-zinc-200 dark:border-zinc-800 px-6 bg-white dark:bg-zinc-900">
+          {/* CORREÇÃO AQUI: 
+            Trocamos 'px-6' por 'pr-6 pl-4' (ou 'pl-3') para encostar o botão 
+            mais na borda e alinhar perfeitamente com a linha do menu.
+          */}
+          <header className="flex h-16 shrink-0 items-center gap-4 border-b border-zinc-200 dark:border-zinc-800 pr-6 pl-4 bg-white dark:bg-zinc-900 sticky top-0 z-10">
             <SidebarTrigger className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-50" />
             <div className="flex-1" />
             {/* Aqui depois podemos colocar o UserNav (Foto do perfil) */}

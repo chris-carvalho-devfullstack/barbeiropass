@@ -1,11 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { supabase } from "@/lib/supabase";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { UserPlus } from "lucide-react";
+import {
+  Plus,
+  UploadCloud,
+  GripVertical,
+  CheckCircle2,
+  Loader2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -27,78 +35,242 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
+// Esquema Zod validando os campos
 const formSchema = z.object({
-  nome: z.string().min(3, "O nome deve ter pelo menos 3 letras"),
-  telefone: z.string().min(10, "Informe o DDD e o número"),
+  nome: z.string().min(3, "O nome deve ter pelo menos 3 caracteres"),
+  descricao: z.string().optional(),
+  categoria: z.string().min(1, "Selecione uma categoria"),
+  tempo: z.string().min(1, "Informe o tempo estimado"),
+  preco: z.string().min(1, "Informe o preço (ex: 50.00)"),
 });
 
-interface CreateClientDialogProps {
-  onClientCreated: () => void | Promise<void>;
+interface CreateServiceDialogProps {
+  onServiceCreated: () => void | Promise<void>;
 }
 
-export function CreateClientDialog({
-  onClientCreated,
-}: CreateClientDialogProps) {
+type FotoState = {
+  id: string;
+  file: File;
+  url: string;
+  status: "pendente" | "uploading" | "concluido" | "erro";
+};
+
+export function CreateServiceDialog({
+  onServiceCreated,
+}: CreateServiceDialogProps) {
   const [open, setOpen] = useState(false);
+  const [fotos, setFotos] = useState<FotoState[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
-    defaultValues: { nome: "", telefone: "" },
+    defaultValues: {
+      nome: "",
+      descricao: "",
+      categoria: "",
+      tempo: "",
+      preco: "",
+    },
   });
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    const toastId = toast.loading("Cadastrando cliente...");
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const novasFotos = Array.from(e.target.files);
 
-    const { error } = await supabase.from("clientes").insert([
-      {
-        nome: values.nome,
-        telefone: values.telefone,
-        frequencia: "Novo",
-      },
-    ]);
-
-    if (error) {
-      console.error(error);
-      toast.error("Erro ao cadastrar o cliente.", { id: toastId });
+    // 1. Validação de Limite Máximo (5 fotos)
+    if (fotos.length + novasFotos.length > 5) {
+      toast.error("O limite máximo é de 5 fotos por serviço.");
       return;
     }
 
-    toast.success("Cliente cadastrado com sucesso!", { id: toastId });
-    form.reset();
-    setOpen(false);
-    onClientCreated();
+    const validFotos: FotoState[] = [];
+    
+    novasFotos.forEach((file) => {
+      // 2. Validação de Formato (Apenas PNG e JPEG)
+      const validTypes = ["image/png", "image/jpeg", "image/jpg"];
+      if (!validTypes.includes(file.type)) {
+        toast.error(`O formato do arquivo ${file.name} não é suportado. Use apenas PNG ou JPG.`);
+        return; // Pula este arquivo
+      }
+
+      // 3. Validação de Tamanho (Max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error(`A imagem ${file.name} excede o limite de 10MB.`);
+        return; // Pula este arquivo
+      } 
+      
+      validFotos.push({
+        id: Math.random().toString(36).substring(7),
+        file,
+        url: URL.createObjectURL(file),
+        status: "pendente",
+      });
+    });
+
+    setFotos((prev) => [...prev, ...validFotos]);
+    e.target.value = "";
+  };
+
+  const removerFoto = (indexToRemove: number) => {
+    setFotos(fotos.filter((_, index) => index !== indexToRemove));
+  };
+
+  const handleDragStart = (index: number) => setDraggedIndex(index);
+  const handleDragOver = (e: React.DragEvent) => e.preventDefault();
+  const handleDrop = (index: number) => {
+    if (draggedIndex === null) return;
+    const novaOrdem = [...fotos];
+    const itemArrastado = novaOrdem.splice(draggedIndex, 1)[0];
+    novaOrdem.splice(index, 0, itemArrastado);
+    setFotos(novaOrdem);
+    setDraggedIndex(null);
+  };
+
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    setIsSubmitting(true);
+    const toastId = toast.loading("A preparar a criação do serviço...");
+
+    try {
+      // 1. Pega o usuário logado
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData.user) throw new Error("Erro de autenticação.");
+      
+      // 2. Busca o ID da barbearia vinculada a esse usuário
+      const { data: memberData, error: memberError } = await supabase
+        .from("barbershop_members")
+        .select("barbershop_id")
+        .eq("profile_id", authData.user.id)
+        .single();
+
+      if (memberError || !memberData) {
+        throw new Error("Usuário não está vinculado a nenhuma barbearia.");
+      }
+      const barbershopId = memberData.barbershop_id;
+
+      const urlsFinais: string[] = [];
+
+      // 3. Upload das Fotos (se houver)
+      if (fotos.length > 0) {
+        toast.loading("A enviar fotografias...", { id: toastId });
+
+        for (let i = 0; i < fotos.length; i++) {
+          const foto = fotos[i];
+
+          setFotos((prev) =>
+            prev.map((f, idx) => (idx === i ? { ...f, status: "uploading" } : f)),
+          );
+
+          const extensao = foto.file.name.split(".").pop();
+          const nomeArquivoSeguro = `${Date.now()}-${i}.${extensao}`;
+          const filePath = `${barbershopId}/${nomeArquivoSeguro}`;
+
+          // Envia a foto com o tipo correto para evitar erro 400
+          const { error: uploadError } = await supabase.storage
+            .from("servicos-imagens")
+            .upload(filePath, foto.file, {
+              contentType: foto.file.type,
+              upsert: true // Evita erros se o arquivo já existir
+            });
+
+          if (uploadError) {
+            console.error("❌ ERRO DETALHADO DO SUPABASE:", uploadError);
+            setFotos((prev) =>
+              prev.map((f, idx) => (idx === i ? { ...f, status: "erro" } : f)),
+            );
+            throw new Error(`Erro do Supabase: ${uploadError.message}`);
+          }
+
+          const { data: urlData } = supabase.storage
+            .from("servicos-imagens")
+            .getPublicUrl(filePath);
+
+          urlsFinais.push(urlData.publicUrl);
+
+          setFotos((prev) =>
+            prev.map((f, idx) => (idx === i ? { ...f, status: "concluido" } : f)),
+          );
+        }
+      }
+
+      toast.loading("A guardar detalhes no banco de dados...", { id: toastId });
+
+      // 4. Salva no banco de dados novo em Inglês (services)
+      const { error: dbError } = await supabase.from("services").insert([
+        {
+          barbershop_id: barbershopId,
+          name: values.nome,
+          description: values.descricao || null,
+          category: values.categoria,
+          duration_minutes: parseInt(values.tempo, 10),
+          price: parseFloat(values.preco.replace(",", ".")), // Aceita vírgula ou ponto
+          is_active: true,
+          photos: urlsFinais,
+        },
+      ]);
+
+    if (dbError) {
+        console.error("❌ DETALHES DO ERRO NO BANCO:", dbError);
+        throw new Error(dbError.message || JSON.stringify(dbError));
+      }
+
+      toast.success("Serviço guardado com sucesso!", { id: toastId });
+      form.reset();
+      setFotos([]);
+      setOpen(false);
+      onServiceCreated();
+    } catch (error: any) {
+      console.error("ERRO COMPLETO:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(`Falha: ${errorMessage}`, { id: toastId });
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen && !isSubmitting) {
+      form.reset();
+      setFotos([]);
+    }
+    setOpen(newOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button className="gap-2">
-          <UserPlus className="size-4" /> Novo Cliente
+          <Plus className="size-4" /> Novo Serviço
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Cadastrar Cliente</DialogTitle>
+          <DialogTitle>Adicionar Serviço</DialogTitle>
           <DialogDescription>
-            Adicione um novo cliente à sua base para histórico e agendamentos.
+            Preencha os detalhes do novo serviço e adicione até 5 fotografias.
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit(onSubmit)}
-            className="space-y-4 pt-4"
-          >
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-4">
             <FormField
               control={form.control}
               name="nome"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Nome Completo</FormLabel>
+                  <FormLabel>Nome do Serviço</FormLabel>
                   <FormControl>
-                    <Input placeholder="Ex: João Silva" {...field} />
+                    <Input placeholder="Ex: Corte Degradê" disabled={isSubmitting} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -107,21 +279,179 @@ export function CreateClientDialog({
 
             <FormField
               control={form.control}
-              name="telefone"
+              name="descricao"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>WhatsApp / Telefone</FormLabel>
+                  <FormLabel>Descrição (Opcional)</FormLabel>
                   <FormControl>
-                    <Input placeholder="Ex: 11 99999-9999" {...field} />
+                    <Textarea
+                      placeholder="Ex: Corte com tesoura, fade na máquina e finalização com pomada."
+                      className="resize-none min-h-[20]"
+                      disabled={isSubmitting}
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
 
-            <DialogFooter className="pt-4">
-              <Button type="submit" className="w-full">
-                Salvar Cliente
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="categoria"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Categoria</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} disabled={isSubmitting}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione..." />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="Cabelo">Cabelo</SelectItem>
+                        <SelectItem value="Barba">Barba</SelectItem>
+                        <SelectItem value="Combo">Combo</SelectItem>
+                        <SelectItem value="Química">Química</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="tempo"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Tempo (min)</FormLabel>
+                    <FormControl>
+                      <Input type="number" placeholder="Ex: 45" disabled={isSubmitting} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="preco"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Preço (R$)</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Ex: 45,00" disabled={isSubmitting} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="space-y-3 pt-2 border-t">
+              <div className="flex justify-between items-center">
+                <FormLabel>Fotografias (Até 5 fotos, max 10MB)</FormLabel>
+                <span className="text-xs text-zinc-500">{fotos.length}/5</span>
+              </div>
+
+              <div className="flex items-center justify-center w-full">
+                <label
+                  className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-lg transition-colors ${fotos.length >= 5 || isSubmitting ? "bg-zinc-100 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 cursor-not-allowed opacity-60" : "bg-zinc-50 dark:bg-zinc-900/50 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"}`}
+                >
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <UploadCloud className="size-6 text-zinc-400 mb-2" />
+                    <p className="text-sm text-zinc-500 text-center px-4">
+                      Clique ou arraste as fotos aqui
+                      <br />
+                      <span className="text-xs">Apenas PNG e JPG</span>
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    className="hidden"
+                    multiple
+                    accept="image/png, image/jpeg, image/jpg"
+                    onChange={handleFileSelect}
+                    disabled={fotos.length >= 5 || isSubmitting}
+                  />
+                </label>
+              </div>
+
+              {fotos.length > 0 && (
+                <div className="space-y-2 mt-4">
+                  {fotos.map((foto, index) => (
+                    <div
+                      key={foto.id}
+                      draggable={!isSubmitting}
+                      onDragStart={() => handleDragStart(index)}
+                      onDragOver={handleDragOver}
+                      onDrop={() => handleDrop(index)}
+                      className={`flex items-center justify-between p-2 bg-white dark:bg-zinc-950 border dark:border-zinc-800 rounded-md shadow-sm transition-all ${isSubmitting ? "opacity-80" : "cursor-move hover:border-zinc-400 dark:hover:border-zinc-600"}`}
+                    >
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <GripVertical className="size-10 text-zinc-400 shrink-0" />
+                        <Image
+                          src={foto.url}
+                          alt="Preview"
+                          width={40}
+                          height={40}
+                          className="size-10 object-cover rounded-md shrink-0"
+                          unoptimized
+                        />
+                        <span className="text-sm truncate w-24 sm:w-48 text-zinc-700 dark:text-zinc-300">
+                          {foto.file.name}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {foto.status === "uploading" && (
+                          <span className="text-xs text-blue-500 flex items-center gap-1">
+                            <Loader2 className="size-3 animate-spin" /> A enviar
+                          </span>
+                        )}
+                        {foto.status === "concluido" && (
+                          <span className="text-xs text-emerald-600 flex items-center gap-1">
+                            <CheckCircle2 className="size-3" /> OK
+                          </span>
+                        )}
+                        {foto.status === "erro" && (
+                          <span className="text-xs text-red-500 flex items-center gap-1">
+                            <X className="size-3" /> Erro
+                          </span>
+                        )}
+                        {foto.status === "pendente" && (
+                          <span className="text-xs text-zinc-400">Pendente</span>
+                        )}
+
+                        {!isSubmitting && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                            onClick={() => removerFoto(index)}
+                          >
+                            <X className="size-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="pt-4 mt-4 border-t dark:border-zinc-800">
+              <Button type="submit" className="w-full" disabled={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...
+                  </>
+                ) : (
+                  "Salvar Serviço"
+                )}
               </Button>
             </DialogFooter>
           </form>

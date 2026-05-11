@@ -48,15 +48,19 @@ import { CreateServiceDialog } from "@/components/create-service-dialog";
 import { UpdateServiceDialog } from "@/components/update-service-dialog";
 import { ServiceDetailsDialog } from "@/components/service-details-dialog";
 
-interface Servico {
+// 2. Interface atualizada para espelhar EXATAMENTE o banco real (Inglês)
+export interface Servico {
   id: string;
-  nome: string;
-  categoria: string;
-  preco: string;
-  tempo: string;
-  status: string;
-  codigo?: string;
-  fotos?: string[];
+  barbershop_id: string;
+  name: string;
+  description?: string;
+  duration_minutes: number;
+  price: number;
+  is_active: boolean;
+  commission_percentage?: number;
+  category?: string; 
+  code?: string;
+  photos?: string[]; 
 }
 
 export default function ServicosPage() {
@@ -79,10 +83,12 @@ export default function ServicosPage() {
   async function fetchServicos() {
     try {
       setLoading(true);
+      // 3. Puxando da tabela correta no Supabase
       const { data, error } = await supabase
-        .from("servicos")
+        .from("services")
         .select("*")
-        .order("created_at", { ascending: false });
+        .order("name", { ascending: true }); // Ordenando por nome
+        
       if (error) throw error;
       setServicos(data || []);
     } catch (error) {
@@ -98,7 +104,7 @@ export default function ServicosPage() {
     const toastId = toast.loading("Excluindo...");
 
     const { error } = await supabase
-      .from("servicos")
+      .from("services")
       .delete()
       .eq("id", serviceToDelete.id);
 
@@ -117,11 +123,9 @@ export default function ServicosPage() {
   }, []);
 
   return (
-    // 2. Adicionamos a animação suave de entrada do painel
     <div className="flex flex-col gap-6 animate-in fade-in zoom-in duration-500">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {/* Suporte ao Dark Mode no ícone */}
           <div className="p-2 bg-zinc-100 dark:bg-zinc-800 rounded-lg">
             <Scissors className="size-5" />
           </div>
@@ -135,7 +139,6 @@ export default function ServicosPage() {
         <CreateServiceDialog onServiceCreated={fetchServicos} />
       </div>
 
-      {/* Suporte ao Dark Mode no fundo da Tabela */}
       <div className="rounded-md border bg-white dark:bg-zinc-950 shadow-sm overflow-hidden">
         {loading ? (
           <div className="flex flex-col items-center py-20 gap-2">
@@ -153,59 +156,68 @@ export default function ServicosPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {servicos.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell>
-                    <button
-                      onClick={() => handleOpenDetails(s)}
-                      className="text-left font-medium text-zinc-700 dark:text-zinc-200 hover:text-black dark:hover:text-white transition-all cursor-pointer"
-                    >
-                      {s.nome}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{s.categoria}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    {s.tempo} min
-                  </TableCell>
-                  <TableCell>R$ {s.preco}</TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Ações</DropdownMenuLabel>
-
-                        <DropdownMenuItem onClick={() => handleOpenDetails(s)}>
-                          <Eye className="mr-2 size-4 text-zinc-500" /> Ver detalhes
-                        </DropdownMenuItem>
-
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setServiceToEdit(s);
-                            setIsEditOpen(true);
-                          }}
-                        >
-                          <Pencil className="mr-2 size-4 text-zinc-500" /> Editar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          className="text-red-600 dark:text-red-400"
-                          onClick={() => {
-                            setServiceToDelete(s);
-                            setIsDeleteOpen(true);
-                          }}
-                        >
-                          <Trash2 className="mr-2 size-4" /> Excluir
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+              {servicos.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-10 text-zinc-500">
+                    Nenhum serviço cadastrado ainda.
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                servicos.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell>
+                      <button
+                        onClick={() => handleOpenDetails(s)}
+                        className="text-left font-medium text-zinc-700 dark:text-zinc-200 hover:text-black dark:hover:text-white transition-all cursor-pointer"
+                      >
+                        {s.name}
+                      </button>
+                    </TableCell>
+                    <TableCell>
+                      {/* Corrigido para utilizar s.category em vez de s.categoria */}
+                      <Badge variant="outline">{s.category || "Geral"}</Badge>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {s.duration_minutes} min
+                    </TableCell>
+                    <TableCell>R$ {s.price}</TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuLabel>Ações</DropdownMenuLabel>
+
+                          <DropdownMenuItem onClick={() => handleOpenDetails(s)}>
+                            <Eye className="mr-2 size-4 text-zinc-500" /> Ver detalhes
+                          </DropdownMenuItem>
+
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setServiceToEdit(s);
+                              setIsEditOpen(true);
+                            }}
+                          >
+                            <Pencil className="mr-2 size-4 text-zinc-500" /> Editar
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-red-600 dark:text-red-400"
+                            onClick={() => {
+                              setServiceToDelete(s);
+                              setIsDeleteOpen(true);
+                            }}
+                          >
+                            <Trash2 className="mr-2 size-4" /> Excluir
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         )}
@@ -224,7 +236,7 @@ export default function ServicosPage() {
             <AlertDialogTitle>Tem certeza?</AlertDialogTitle>
             <AlertDialogDescription>
               Esta ação não pode ser desfeita. O serviço{" "}
-              <b>{serviceToDelete?.nome}</b> será removido permanentemente.
+              <b>{serviceToDelete?.name}</b> será removido permanentemente.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

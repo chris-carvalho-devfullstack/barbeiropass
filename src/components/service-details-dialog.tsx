@@ -8,6 +8,7 @@ import {
   DollarSign,
   Image as ImageIcon,
   QrCode,
+  FileText
 } from "lucide-react";
 
 import {
@@ -19,16 +20,17 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
-// Ajuste a interface de acordo com o seu tipo real de Serviço
+// Interface actualizada para el patrón en Inglés de la base de datos
 interface Servico {
   id: string;
-  nome: string;
-  categoria: string;
-  tempo: string | number;
-  preco: string | number;
-  status: string;
-  codigo?: string;
-  fotos?: string[];
+  name: string;
+  description?: string;
+  duration_minutes: number;
+  price: number;
+  is_active: boolean;
+  category?: string; 
+  code?: string;
+  photos?: string[]; 
 }
 
 interface ServiceDetailsDialogProps {
@@ -42,10 +44,8 @@ export function ServiceDetailsDialog({
   open,
   onOpenChange,
 }: ServiceDetailsDialogProps) {
-  // 1. Criado estado para controlar qual foto está aparecendo
   const [fotoAtiva, setFotoAtiva] = useState(0);
 
-  // 2. Reseta para a primeira foto quando abrir o modal
   useEffect(() => {
     if (open) setFotoAtiva(0);
   }, [open, servico?.id]);
@@ -55,22 +55,21 @@ export function ServiceDetailsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl overflow-hidden p-0">
-        {/* Cabeçalho do Modal - Adicionado pr-12 para afastar a tag Ativo do X */}
         <DialogHeader className="px-6 pt-6 pb-2 pr-12">
           <div className="flex items-start justify-between">
             <div>
-              <DialogTitle className="text-2xl font-bold text-zinc-900">
-                {servico.nome}
+              <DialogTitle className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+                {servico.name}
               </DialogTitle>
               <p className="text-sm text-zinc-500 mt-1 flex items-center gap-2">
-                <QrCode className="size-4" /> Código: {servico.codigo || "N/A"}
+                <QrCode className="size-4" /> Código: {servico.code || "N/A"}
               </p>
             </div>
             <Badge
-              variant={servico.status === "Ativo" ? "default" : "secondary"}
+              variant={servico.is_active ? "default" : "secondary"}
               className="text-sm"
             >
-              {servico.status}
+              {servico.is_active ? "Ativo" : "Inativo"}
             </Badge>
           </div>
         </DialogHeader>
@@ -78,32 +77,29 @@ export function ServiceDetailsDialog({
         <Separator />
 
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Coluna da Esquerda: Fotos */}
+          {/* Columna de la Izquierda: Fotos */}
           <div className="space-y-3">
-            {servico.fotos && servico.fotos.length > 0 ? (
+            {servico.photos && servico.photos.length > 0 ? (
               <>
-                {/* Foto Principal - Agora usa a variável fotoAtiva */}
-                <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50">
+                <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900">
                   <Image
-                    src={servico.fotos[fotoAtiva]}
-                    alt={servico.nome}
+                    src={servico.photos[fotoAtiva]}
+                    alt={servico.name}
                     fill
                     className="object-cover"
                     unoptimized
                   />
                 </div>
-                {/* Miniaturas (se houver mais de 1 foto) */}
-                {servico.fotos.length > 1 && (
+                {servico.photos.length > 1 && (
                   <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
-                    {/* Alterado para renderizar todas as fotos e torná-las clicáveis */}
-                    {servico.fotos.map((foto, index) => (
+                    {servico.photos.map((foto, index) => (
                       <button
                         key={index}
                         onClick={() => setFotoAtiva(index)}
                         className={`relative size-16 flex-shrink-0 overflow-hidden rounded-lg border transition-all ${
                           fotoAtiva === index
-                            ? "border-blue-600 ring-2 ring-blue-100 opacity-100"
-                            : "border-zinc-200 opacity-60 hover:opacity-100"
+                            ? "border-blue-600 ring-2 ring-blue-100 dark:ring-blue-900 opacity-100"
+                            : "border-zinc-200 dark:border-zinc-800 opacity-60 hover:opacity-100"
                         }`}
                       >
                         <Image
@@ -119,22 +115,21 @@ export function ServiceDetailsDialog({
                 )}
               </>
             ) : (
-              // Fallback sem foto
-              <div className="flex flex-col items-center justify-center aspect-square w-full rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50 text-zinc-400">
+              <div className="flex flex-col items-center justify-center aspect-square w-full rounded-xl border-2 border-dashed border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-400">
                 <ImageIcon className="size-12 mb-2 opacity-50" />
                 <span className="text-sm">Sem fotografias</span>
               </div>
             )}
           </div>
 
-          {/* Coluna da Direita: Detalhes - MANTIDO EXATAMENTE IGUAL */}
+          {/* Columna de la Derecha: Detalles */}
           <div className="space-y-6">
             <div className="space-y-1">
               <h4 className="text-sm font-medium text-zinc-500 flex items-center gap-2">
                 <Tag className="size-4" /> Categoria
               </h4>
-              <p className="text-lg font-medium text-zinc-900">
-                {servico.categoria}
+              <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                {servico.category || "Geral"}
               </p>
             </div>
 
@@ -142,8 +137,8 @@ export function ServiceDetailsDialog({
               <h4 className="text-sm font-medium text-zinc-500 flex items-center gap-2">
                 <Clock className="size-4" /> Duração Estimada
               </h4>
-              <p className="text-lg font-medium text-zinc-900">
-                {servico.tempo} minutos
+              <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                {servico.duration_minutes} minutos
               </p>
             </div>
 
@@ -151,12 +146,23 @@ export function ServiceDetailsDialog({
               <h4 className="text-sm font-medium text-zinc-500 flex items-center gap-2">
                 <DollarSign className="size-4" /> Preço Base
               </h4>
-              <p className="text-2xl font-bold text-emerald-600">
-                R$ {servico.preco}
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                R$ {servico.price}
               </p>
             </div>
 
-            <div className="rounded-lg bg-zinc-50 p-4 border border-zinc-100 mt-4">
+            {servico.description && (
+              <div className="space-y-1">
+                <h4 className="text-sm font-medium text-zinc-500 flex items-center gap-2">
+                  <FileText className="size-4" /> Descrição
+                </h4>
+                <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+                  {servico.description}
+                </p>
+              </div>
+            )}
+
+            <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900 p-4 border border-zinc-100 dark:border-zinc-800 mt-4">
               <p className="text-sm text-zinc-500">
                 Este serviço é visível para os clientes no catálogo online e no
                 PDV da barbearia.

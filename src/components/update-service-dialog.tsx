@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react"; // useState removido
+import { useEffect } from "react"; 
 import { supabase } from "@/lib/supabase";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea"; // Adicionado caso queira editar descrição
 import {
   Select,
   SelectContent,
@@ -33,24 +34,27 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// Form Schema continua o mesmo do seu formulário visual
 const formSchema = z.object({
   nome: z.string().min(3, "Mínimo 3 caracteres"),
+  descricao: z.string().optional(),
   categoria: z.string().min(1, "Obrigatório"),
   tempo: z.string().min(1, "Obrigatório"),
   preco: z.string().min(1, "Obrigatório"),
 });
 
-// Tipagem exata para substituir o "any"
+// Interface alinhada ao banco de dados em Inglês
 interface Servico {
   id: string;
-  nome: string;
-  categoria: string;
-  preco: string;
-  tempo: string;
+  name: string;
+  description?: string;
+  duration_minutes: number;
+  price: number;
+  category?: string; 
 }
 
 interface UpdateServiceDialogProps {
-  servico: Servico | null; // O TypeScript agora sabe exatamente o formato do dado
+  servico: Servico | null; 
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onServiceUpdated: () => void;
@@ -64,16 +68,24 @@ export function UpdateServiceDialog({
 }: UpdateServiceDialogProps) {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
+    defaultValues: {
+      nome: "",
+      descricao: "",
+      categoria: "",
+      tempo: "",
+      preco: "",
+    }
   });
 
-  // Atualiza o form quando o serviço selecionado mudar
+  // Atualiza o form preenchendo os dados do banco para o formulário
   useEffect(() => {
     if (servico) {
       form.reset({
-        nome: servico.nome,
-        categoria: servico.categoria,
-        tempo: servico.tempo,
-        preco: servico.preco,
+        nome: servico.name,
+        descricao: servico.description || "",
+        categoria: servico.category || "",
+        tempo: String(servico.duration_minutes),
+        preco: String(servico.price),
       });
     }
   }, [servico, form]);
@@ -81,24 +93,29 @@ export function UpdateServiceDialog({
   async function onSubmit(values: z.infer<typeof formSchema>) {
     if (!servico) return;
 
-    const toastId = toast.loading("Atualizando serviço...");
+    const toastId = toast.loading("A atualizar serviço...");
 
+    const tempoNumerico = parseInt(values.tempo, 10);
+    const precoNumerico = parseFloat(values.preco.replace(",", "."));
+
+    // Tabela nova (services) e colunas novas em inglês
     const { error } = await supabase
-      .from("servicos")
+      .from("services")
       .update({
-        nome: values.nome,
-        categoria: values.categoria,
-        tempo: values.tempo,
-        preco: values.preco,
+        name: values.nome,
+        description: values.descricao || null,
+        category: values.categoria,
+        duration_minutes: tempoNumerico,
+        price: precoNumerico,
       })
       .eq("id", servico.id);
 
     if (error) {
-      toast.error("Erro ao atualizar.", { id: toastId });
+      toast.error(`Erro ao atualizar: ${error.message}`, { id: toastId });
       return;
     }
 
-    toast.success("Serviço atualizado!", { id: toastId });
+    toast.success("Serviço atualizado com sucesso!", { id: toastId });
     onOpenChange(false);
     onServiceUpdated();
   }
@@ -128,6 +145,21 @@ export function UpdateServiceDialog({
                 </FormItem>
               )}
             />
+
+            <FormField
+              control={form.control}
+              name="descricao"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Descrição</FormLabel>
+                  <FormControl>
+                    <Textarea className="resize-none" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}

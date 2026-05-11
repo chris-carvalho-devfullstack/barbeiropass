@@ -35,7 +35,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea"; // <-- Importação do Textarea adicionada
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -44,13 +44,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-// Esquema atualizado com a descrição opcional
+// Esquema Zod validando os campos
 const formSchema = z.object({
   nome: z.string().min(3, "O nome deve ter pelo menos 3 caracteres"),
-  descricao: z.string().optional(), // <-- Novo campo
+  descricao: z.string().optional(),
   categoria: z.string().min(1, "Selecione uma categoria"),
   tempo: z.string().min(1, "Informe o tempo estimado"),
-  preco: z.string().min(1, "Informe o preço (ex: 50,00)"),
+  preco: z.string().min(1, "Informe o preço (ex: 50.00)"),
 });
 
 interface CreateServiceDialogProps {
@@ -76,14 +76,12 @@ export function CreateServiceDialog({
     resolver: zodResolver(formSchema),
     defaultValues: {
       nome: "",
-      descricao: "", // <-- Valor inicial adicionado
+      descricao: "",
       categoria: "",
       tempo: "",
       preco: "",
     },
   });
-
-  const gerarCodigo = () => Math.floor(1000 + Math.random() * 9000).toString();
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -95,17 +93,25 @@ export function CreateServiceDialog({
     }
 
     const validFotos: FotoState[] = [];
+    
     novasFotos.forEach((file) => {
+      const validTypes = ["image/png", "image/jpeg", "image/jpg"];
+      if (!validTypes.includes(file.type)) {
+        toast.error(`O formato do arquivo ${file.name} não é suportado. Use apenas PNG ou JPG.`);
+        return;
+      }
+
       if (file.size > 10 * 1024 * 1024) {
         toast.error(`A imagem ${file.name} excede o limite de 10MB.`);
-      } else {
-        validFotos.push({
-          id: Math.random().toString(36).substring(7),
-          file,
-          url: URL.createObjectURL(file),
-          status: "pendente",
-        });
-      }
+        return;
+      } 
+      
+      validFotos.push({
+        id: Math.random().toString(36).substring(7),
+        file,
+        url: URL.createObjectURL(file),
+        status: "pendente",
+      });
     });
 
     setFotos((prev) => [...prev, ...validFotos]);
@@ -129,82 +135,106 @@ export function CreateServiceDialog({
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsSubmitting(true);
-    const toastId = toast.loading("A iniciar a criação do serviço...");
+    const toastId = toast.loading("A preparar a criação do serviço...");
 
     try {
-      const { data: authData, error: authError } =
-        await supabase.auth.getUser();
+      // 1. Pega o usuário logado
+      const { data: authData, error: authError } = await supabase.auth.getUser();
       if (authError || !authData.user) throw new Error("Erro de autenticação.");
-      const barbeariaId = authData.user.id;
+      
+      // 2. Busca o ID da barbearia vinculada a esse usuário
+      const { data: memberData, error: memberError } = await supabase
+        .from("barbershop_members")
+        .select("barbershop_id")
+        .eq("profile_id", authData.user.id)
+        .single();
 
-      const codigoServico = gerarCodigo();
+      if (memberError || !memberData) {
+        throw new Error("Usuário não está vinculado a nenhuma barbearia.");
+      }
+      const barbershopId = memberData.barbershop_id;
+
       const urlsFinais: string[] = [];
 
-      toast.loading("A enviar fotos...", { id: toastId });
+      // 3. Upload das Fotos (se houver)
+      if (fotos.length > 0) {
+        toast.loading("A enviar fotografias...", { id: toastId });
 
-      for (let i = 0; i < fotos.length; i++) {
-        const foto = fotos[i];
+        for (let i = 0; i < fotos.length; i++) {
+          const foto = fotos[i];
 
-        setFotos((prev) =>
-          prev.map((f, idx) => (idx === i ? { ...f, status: "uploading" } : f)),
-        );
-
-        const extensao = foto.file.name.split(".").pop();
-        const nomeArquivoSeguro = `${Date.now()}-${i}.${extensao}`;
-        const filePath = `${barbeariaId}/${codigoServico}/${nomeArquivoSeguro}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("servicos-imagens")
-          .upload(filePath, foto.file);
-
-        if (uploadError) {
           setFotos((prev) =>
-            prev.map((f, idx) => (idx === i ? { ...f, status: "erro" } : f)),
+            prev.map((f, idx) => (idx === i ? { ...f, status: "uploading" } : f)),
           );
-          throw new Error(`Falha ao enviar a imagem ${foto.file.name}`);
+
+          const extensao = foto.file.name.split(".").pop();
+          const nomeArquivoSeguro = `${Date.now()}-${i}.${extensao}`;
+          const filePath = `${barbershopId}/${nomeArquivoSeguro}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from("servicos-imagens")
+            .upload(filePath, foto.file, {
+              contentType: foto.file.type,
+              upsert: true
+            });
+
+          if (uploadError) {
+            console.error("❌ ERRO NO UPLOAD:", uploadError);
+            setFotos((prev) =>
+              prev.map((f, idx) => (idx === i ? { ...f, status: "erro" } : f)),
+            );
+            throw new Error(`Erro no upload: ${uploadError.message}`);
+          }
+
+          const { data: urlData } = supabase.storage
+            .from("servicos-imagens")
+            .getPublicUrl(filePath);
+
+          urlsFinais.push(urlData.publicUrl);
+
+          setFotos((prev) =>
+            prev.map((f, idx) => (idx === i ? { ...f, status: "concluido" } : f)),
+          );
         }
-
-        const { data: urlData } = supabase.storage
-          .from("servicos-imagens")
-          .getPublicUrl(filePath);
-
-        urlsFinais.push(urlData.publicUrl);
-
-        setFotos((prev) =>
-          prev.map((f, idx) => (idx === i ? { ...f, status: "concluido" } : f)),
-        );
       }
 
-      toast.loading("A guardar detalhes do serviço...", { id: toastId });
+      toast.loading("A guardar detalhes no banco de dados...", { id: toastId });
 
-      const { error: dbError } = await supabase.from("servicos").insert([
+      const tempoNumerico = parseInt(values.tempo, 10);
+      const precoNumerico = parseFloat(values.preco.replace(",", "."));
+
+      if (isNaN(tempoNumerico) || isNaN(precoNumerico)) {
+        throw new Error("Tempo ou Preço contêm valores inválidos.");
+      }
+
+      // 4. Salva no banco de dados - ATENÇÃO AQUI: Tabela e colunas em Inglês
+      const { error: dbError } = await supabase.from("services").insert([
         {
-          barbearia_id: barbeariaId,
-          nome: values.nome,
-          descricao: values.descricao, // <-- Descrição salva no banco
-          categoria: values.categoria,
-          tempo: values.tempo,
-          preco: values.preco,
-          status: "Ativo",
-          codigo: codigoServico,
-          fotos: urlsFinais,
+          barbershop_id: barbershopId,
+          name: values.nome,
+          description: values.descricao || null,
+          category: values.categoria,
+          duration_minutes: tempoNumerico,
+          price: precoNumerico,
+          is_active: true,
+          photos: urlsFinais.length > 0 ? urlsFinais : null,
         },
       ]);
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        console.error("❌ DETALHES DO ERRO NO BANCO:", dbError);
+        throw new Error(dbError.message);
+      }
 
-      toast.success("Serviço e fotos salvos com sucesso!", { id: toastId });
+      toast.success("Serviço guardado com sucesso!", { id: toastId });
       form.reset();
       setFotos([]);
       setOpen(false);
       onServiceCreated();
-    } catch (error) {
-      console.error(error);
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Erro desconhecido ao salvar o serviço.";
-      toast.error(errorMessage, { id: toastId });
+    } catch (error: unknown) {
+      console.error("ERRO COMPLETO:", error);
+      const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
+      toast.error(`Falha: ${errorMessage}`, { id: toastId });
     } finally {
       setIsSubmitting(false);
     }
@@ -235,10 +265,7 @@ export function CreateServiceDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit(onSubmit)}
-            className="space-y-4 pt-4"
-          >
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-4">
             <FormField
               control={form.control}
               name="nome"
@@ -246,18 +273,13 @@ export function CreateServiceDialog({
                 <FormItem>
                   <FormLabel>Nome do Serviço</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="Ex: Corte Degradê"
-                      disabled={isSubmitting}
-                      {...field}
-                    />
+                    <Input placeholder="Ex: Corte Degradê" disabled={isSubmitting} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
 
-            {/* Novo Campo de Descrição Adicionado Aqui */}
             <FormField
               control={form.control}
               name="descricao"
@@ -284,11 +306,7 @@ export function CreateServiceDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Categoria</FormLabel>
-                    <Select
-                      onValueChange={field.onChange}
-                      defaultValue={field.value}
-                      disabled={isSubmitting}
-                    >
+                    <Select onValueChange={field.onChange} defaultValue={field.value} disabled={isSubmitting}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Selecione..." />
@@ -313,12 +331,7 @@ export function CreateServiceDialog({
                   <FormItem>
                     <FormLabel>Tempo (min)</FormLabel>
                     <FormControl>
-                      <Input
-                        type="number"
-                        placeholder="Ex: 45"
-                        disabled={isSubmitting}
-                        {...field}
-                      />
+                      <Input type="number" placeholder="Ex: 45" disabled={isSubmitting} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -333,11 +346,7 @@ export function CreateServiceDialog({
                 <FormItem>
                   <FormLabel>Preço (R$)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="Ex: 45,00"
-                      disabled={isSubmitting}
-                      {...field}
-                    />
+                    <Input placeholder="Ex: 45,00" disabled={isSubmitting} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -352,21 +361,21 @@ export function CreateServiceDialog({
 
               <div className="flex items-center justify-center w-full">
                 <label
-                  className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-lg transition-colors ${fotos.length >= 5 || isSubmitting ? "bg-zinc-100 border-zinc-200 cursor-not-allowed opacity-60" : "bg-zinc-50 border-zinc-300 hover:bg-zinc-100 cursor-pointer"}`}
+                  className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-lg transition-colors ${fotos.length >= 5 || isSubmitting ? "bg-zinc-100 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 cursor-not-allowed opacity-60" : "bg-zinc-50 dark:bg-zinc-900/50 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"}`}
                 >
                   <div className="flex flex-col items-center justify-center pt-5 pb-6">
                     <UploadCloud className="size-6 text-zinc-400 mb-2" />
                     <p className="text-sm text-zinc-500 text-center px-4">
                       Clique ou arraste as fotos aqui
                       <br />
-                      <span className="text-xs">PNG, JPG ou WEBP</span>
+                      <span className="text-xs">Apenas PNG e JPG</span>
                     </p>
                   </div>
                   <input
                     type="file"
                     className="hidden"
                     multiple
-                    accept="image/*"
+                    accept="image/png, image/jpeg, image/jpg"
                     onChange={handleFileSelect}
                     disabled={fotos.length >= 5 || isSubmitting}
                   />
@@ -382,7 +391,7 @@ export function CreateServiceDialog({
                       onDragStart={() => handleDragStart(index)}
                       onDragOver={handleDragOver}
                       onDrop={() => handleDrop(index)}
-                      className={`flex items-center justify-between p-2 bg-white border rounded-md shadow-sm transition-all ${isSubmitting ? "opacity-80" : "cursor-move hover:border-zinc-400"}`}
+                      className={`flex items-center justify-between p-2 bg-white dark:bg-zinc-950 border dark:border-zinc-800 rounded-md shadow-sm transition-all ${isSubmitting ? "opacity-80" : "cursor-move hover:border-zinc-400 dark:hover:border-zinc-600"}`}
                     >
                       <div className="flex items-center gap-3 overflow-hidden">
                         <GripVertical className="size-10 text-zinc-400 shrink-0" />
@@ -394,7 +403,7 @@ export function CreateServiceDialog({
                           className="size-10 object-cover rounded-md shrink-0"
                           unoptimized
                         />
-                        <span className="text-sm truncate w-24 sm:w-48">
+                        <span className="text-sm truncate w-24 sm:w-48 text-zinc-700 dark:text-zinc-300">
                           {foto.file.name}
                         </span>
                       </div>
@@ -416,9 +425,7 @@ export function CreateServiceDialog({
                           </span>
                         )}
                         {foto.status === "pendente" && (
-                          <span className="text-xs text-zinc-400">
-                            Pendente
-                          </span>
+                          <span className="text-xs text-zinc-400">Pendente</span>
                         )}
 
                         {!isSubmitting && (
@@ -426,7 +433,7 @@ export function CreateServiceDialog({
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            className="h-6 w-6 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
                             onClick={() => removerFoto(index)}
                           >
                             <X className="size-4" />
@@ -439,13 +446,11 @@ export function CreateServiceDialog({
               )}
             </div>
 
-            <DialogFooter className="pt-4 mt-4 border-t">
+            <DialogFooter className="pt-4 mt-4 border-t dark:border-zinc-800">
               <Button type="submit" className="w-full" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
-                    {" "}
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando
-                    Serviço...{" "}
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...
                   </>
                 ) : (
                   "Salvar Serviço"
