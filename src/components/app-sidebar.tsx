@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link"; // Adicionamos a importação do Link
+import Link from "next/link";
 import {
   Scissors,
   Users,
@@ -23,10 +23,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar, // 1. Adicionamos a importação do hook useSidebar
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-// Ajustei a rota do Dashboard para "/dashboard"
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Agenda", url: "/agendamentos", icon: Calendar },
@@ -39,6 +39,9 @@ const items = [
 
 export function AppSidebar() {
   const [mounted, setMounted] = React.useState(false);
+  
+  // 2. Extraímos o estado (state) atual do menu lateral
+  const { state } = useSidebar();
 
   React.useEffect(() => {
     setMounted(true);
@@ -48,11 +51,21 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b h-14 flex items-center px-4">
-        <span className="font-bold text-lg tracking-tight">
-          Barber<span className="text-zinc-500">Flow</span>
-        </span>
+      {/* 3. Ajustamos as classes baseadas no estado e fazemos a renderização condicional */}
+      <SidebarHeader 
+        className={`flex h-16 items-center border-b transition-all ${
+          state === "expanded" ? "px-4" : "justify-center px-0"
+        }`}
+      >
+        {state === "expanded" ? (
+          <span className="font-bold text-lg tracking-tight whitespace-nowrap">
+            Barbeiro<span className="text-zinc-500">Pass</span>
+          </span>
+        ) : (
+          <Scissors className="size-6 shrink-0" /> // O Ícone substituto (futura logo)
+        )}
       </SidebarHeader>
+
       <TooltipProvider delayDuration={0}>
         <SidebarContent>
           <SidebarGroup>
@@ -62,7 +75,6 @@ export function AppSidebar() {
                 {items.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild tooltip={item.title}>
-                      {/* Trocamos o <a> pelo <Link> do Next.js */}
                       <Link href={item.url}>
                         <item.icon className="size-4" />
                         <span>{item.title}</span>

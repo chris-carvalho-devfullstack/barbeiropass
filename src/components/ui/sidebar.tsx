@@ -246,7 +246,8 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  // ATUALIZADO: Extraímos o 'state' do hook
+  const { toggleSidebar, state } = useSidebar()
 
   return (
     <Button
@@ -261,7 +262,13 @@ function SidebarTrigger({
       }}
       {...props}
     >
-      <PanelLeftIcon />
+      {/* ATUALIZADO: Adicionada a lógica condicional de animação no PanelLeftIcon */}
+      <PanelLeftIcon 
+        className={cn(
+          "transition-transform duration-300 ease-in-out",
+          state === "expanded" ? "-scale-x-100" : "scale-x-100"
+        )} 
+      />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   )
