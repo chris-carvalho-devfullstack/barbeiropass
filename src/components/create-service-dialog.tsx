@@ -1,5 +1,7 @@
 "use client";
 
+import { syncMyOnboardingScore } from "@/app/(dashboard)/perfil/actions";
+
 import { useState } from "react";
 import Image from "next/image";
 import { supabase } from "@/lib/supabase";
@@ -227,6 +229,7 @@ export function CreateServiceDialog({
       }
 
       toast.success("Serviço guardado com sucesso!", { id: toastId });
+      await syncMyOnboardingScore();
       form.reset();
       setFotos([]);
       setOpen(false);

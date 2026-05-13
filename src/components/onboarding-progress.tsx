@@ -1,87 +1,86 @@
 "use client";
 
-import { CheckCircle2, Circle, ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CheckCircle2, Circle, MapPin, Clock, Scissors, Image as ImageIcon } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import Link from "next/link";
 
 interface OnboardingProgressProps {
-  score: number; // Vai de 0 a 100
-  steps: {
-    id: string;
-    title: string;
-    description: string;
-    completed: boolean;
-    href: string;
-  }[];
+  score: number;
+  stepsCompleted: {
+    hasAddress: boolean;
+    hasHours: boolean;
+    hasServices: boolean;
+    hasAppearance: boolean;
+  };
 }
 
-export function OnboardingProgress({ score, steps }: OnboardingProgressProps) {
-  // Se o score for 100, podemos esconder ou mostrar uma mensagem de sucesso
-  if (score >= 100) return null;
+export function OnboardingProgress({ score, stepsCompleted }: OnboardingProgressProps) {
+  const steps = [
+    {
+      title: "Endereço",
+      description: "Localização da sua barbearia",
+      href: "/perfil/endereco",
+      icon: MapPin,
+      completed: stepsCompleted.hasAddress,
+    },
+    {
+      title: "Horários",
+      description: "Quando você está aberto",
+      href: "/perfil/horarios",
+      icon: Clock,
+      completed: stepsCompleted.hasHours,
+    },
+    {
+      title: "Serviços",
+      description: "O que você oferece",
+      href: "/servicos",
+      icon: Scissors,
+      completed: stepsCompleted.hasServices,
+    },
+    {
+      title: "Aparência",
+      description: "Fotos e descrição",
+      href: "/perfil/aparencia",
+      icon: ImageIcon,
+      completed: stepsCompleted.hasAppearance,
+    },
+  ];
 
   return (
-    <Card className="border-indigo-100 bg-indigo-50/30 mb-8 shadow-sm">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+    <div className="bg-white p-6 rounded-xl border border-zinc-100 shadow-sm space-y-6">
+      <div className="space-y-2">
+        <div className="flex justify-between items-end">
           <div>
-            <CardTitle className="text-xl font-bold text-zinc-900">
-              Complete seu perfil
-            </CardTitle>
-            <CardDescription className="text-zinc-600 mt-1">
-              Sua barbearia só ficará visível para clientes ao atingir 100%.
-            </CardDescription>
+            <h3 className="font-bold text-zinc-900 text-lg">Seu Perfil</h3>
+            <p className="text-sm text-zinc-500">Complete seu cadastro para ganhar visibilidade</p>
           </div>
-          <div className="text-right">
-            <span className="text-3xl font-black text-indigo-600">{score}%</span>
-          </div>
+          <span className="text-2xl font-black text-zinc-900">{score}%</span>
         </div>
-        
-        {/* Barra de Progresso */}
-        <div className="w-full bg-zinc-200 rounded-full h-2.5 mt-4">
-          <div 
-            className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500 ease-in-out" 
-            style={{ width: `${score}%` }}
-          ></div>
-        </div>
-      </CardHeader>
+        <Progress value={score} className="h-2" />
+      </div>
 
-      <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          {steps.map((step) => (
-            <Link 
-              key={step.id} 
-              href={step.href}
-              className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
-                step.completed 
-                  ? "bg-white border-zinc-200 opacity-70" 
-                  : "bg-white border-indigo-200 hover:border-indigo-300 hover:shadow-sm cursor-pointer group"
-              }`}
-            >
-              <div className="mt-0.5">
-                {step.completed ? (
-                  <CheckCircle2 className="size-5 text-emerald-500" />
-                ) : (
-                  <Circle className="size-5 text-zinc-300 group-hover:text-indigo-400 transition-colors" />
-                )}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {steps.map((step) => (
+          <Link
+            key={step.title}
+            href={step.href}
+            className="group p-4 rounded-lg border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 transition-all"
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div className={`p-2 rounded-lg ${step.completed ? 'bg-green-50 text-green-600' : 'bg-zinc-100 text-zinc-500 group-hover:bg-white'}`}>
+                <step.icon size={20} />
               </div>
-              <div className="flex-1">
-                <p className={`text-sm font-semibold ${step.completed ? "text-zinc-500 line-through" : "text-zinc-900"}`}>
-                  {step.title}
-                </p>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  {step.description}
-                </p>
-              </div>
-              {!step.completed && (
-                <div className="flex items-center justify-center self-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <ArrowRight className="size-4 text-indigo-600" />
-                </div>
+              {step.completed ? (
+                <CheckCircle2 size={18} className="text-green-600" />
+              ) : (
+                <Circle size={18} className="text-zinc-300" />
               )}
-            </Link>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+            </div>
+            <h4 className="font-semibold text-sm text-zinc-900">{step.title}</h4>
+            <p className="text-xs text-zinc-500 line-clamp-1">{step.description}</p>
+          </Link>
+        ))}
+      </div>
+    </div>
   );
 }

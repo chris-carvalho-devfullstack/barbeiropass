@@ -1,5 +1,7 @@
 "use client";
 
+import { syncMyOnboardingScore } from "@/app/(dashboard)/perfil/actions";
+
 // 1. Blindagem da Cloudflare: Força a página a rodar no servidor Edge
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
@@ -113,6 +115,7 @@ export default function ServicosPage() {
       toast.error("Erro ao excluir.", { id: toastId });
     } else {
       toast.success("Serviço removido!", { id: toastId });
+      await syncMyOnboardingScore();
       fetchServicos();
     }
     setIsDeleteOpen(false);
