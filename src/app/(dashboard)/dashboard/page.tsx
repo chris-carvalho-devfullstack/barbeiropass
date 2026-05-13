@@ -2,8 +2,8 @@ import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Scissors, Users, Calendar, DollarSign } from "lucide-react";
+import { OnboardingProgress } from "@/components/onboarding-progress";
 
-// Força a renderização dinâmica (igual fizemos no cadastro)
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
@@ -17,37 +17,94 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  // 2. Busca os dados da Barbearia vinculada a esse usuário
-  const { data: memberData, error } = await supabase
+  // 2. Busca os dados da Barbearia vinculada
+  // Note que usamos o .single() para pegar apenas UM resultado
+  const { data: memberData, error: dbError } = await supabase
     .from("barbershop_members")
     .select(`
       role,
       barbershops (
         name,
-        slug
+        slug,
+        onboarding_score 
       )
     `)
     .eq("profile_id", user.id)
-    .single();
+    .maybeSingle(); // Usamos maybeSingle para não quebrar se não encontrar nada
 
-  if (error || !memberData) {
-    return <div>Erro ao carregar os dados da sua barbearia.</div>;
+  // Se houver erro de banco, logamos no terminal para você ver
+  if (dbError) {
+    console.error("Erro do Supabase:", dbError);
+    return (
+      <div className="p-10 text-red-500 border border-red-200 bg-red-50 rounded-lg">
+        <strong>Erro de Banco de Dados:</strong> {dbError.message}
+        <p className="text-sm mt-2">Verifique as políticas de RLS no Supabase.</p>
+      </div>
+    );
   }
 
-  // Extrai o nome da barbearia (Lidando com a tipagem do Supabase)
-  const barbershop = memberData.barbershops as any;
+  // Se não houver vínculo com barbearia, redireciona para o cadastro da barbearia
+  if (!memberData || !memberData.barbershops) {
+    redirect("/cadastro/barbearia");
+  }
+
+  // 3. Extração segura dos dados (Lidando com o fato de barbershops poder vir como objeto ou array)
+  const bData = memberData.barbershops;
+  const barbershop = Array.isArray(bData) ? bData[0] : bData;
+
   const barbershopName = barbershop?.name || "Sua Barbearia";
+  const score = barbershop?.onboarding_score ?? 30;
+
+  // 4. Passos do Onboarding
+  const onboardingSteps = [
+    {
+      id: "account",
+      title: "Conta criada",
+      description: "Informações básicas registradas",
+      completed: true,
+      href: "#",
+    },
+    {
+      id: "location",
+      title: "Endereço da Barbearia",
+      description: "Onde seus clientes vão te encontrar?",
+      completed: score >= 50,
+      href: "/perfil/endereco", 
+    },
+    {
+      id: "hours",
+      title: "Horários de Funcionamento",
+      description: "Dias e horários de atendimento",
+      completed: score >= 70,
+      href: "/perfil/horarios",
+    },
+    {
+      id: "services",
+      title: "Cadastrar Serviços",
+      description: "Cortes, barba, pacotes e valores",
+      completed: score >= 90,
+      href: "/servicos",
+    },
+    {
+      id: "photos",
+      title: "Fotos e Descrição",
+      description: "Atraia clientes com sua identidade visual",
+      completed: score === 100,
+      href: "/perfil/aparencia",
+    }
+  ];
 
   return (
     <div className="space-y-8 animate-in fade-in zoom-in duration-500">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground mt-2">
-          Bem-vindo ao painel de controle da <strong className="text-indigo-600 dark:text-indigo-400">{barbershopName}</strong>.
+          Bem-vindo ao painel de controle da <strong className="text-indigo-600">{barbershopName}</strong>.
         </p>
       </div>
 
-      {/* Cards de Resumo usando o componente da sua Estrutura */}
+      <OnboardingProgress score={score} steps={onboardingSteps} />
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

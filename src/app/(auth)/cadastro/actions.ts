@@ -3,20 +3,18 @@
 import { createClient } from "@/utils/supabase/server";
 import { revalidatePath } from "next/cache";
 
-// 1. Criamos a tipagem exata dos dados que vêm do formulário
-interface RegisterFormData {
+// --- ETAPA 1: Cadastro do Usuário ---
+interface RegisterProfileData {
   fullName: string;
   email: string;
   phone: string;
-  document: string;
   password: string;
 }
 
-// 2. Trocamos o 'any' pela nossa interface
-export async function registerBarbershopOwner(formData: RegisterFormData) {
+export async function registerProfile(formData: RegisterProfileData) {
   const supabase = await createClient();
 
-  // Cria o usuário no Supabase Auth
+  // 1. Cria o usuário no Supabase Auth
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: formData.email,
     password: formData.password,
@@ -28,7 +26,7 @@ export async function registerBarbershopOwner(formData: RegisterFormData) {
 
   const userId = authData.user.id;
 
-  // Insere os dados do Proprietário na tabela de Perfis
+  // 2. Insere os dados físicos na tabela 'profiles'
   const { error: profileError } = await supabase.from("profiles").insert({
     id: userId,
     full_name: formData.fullName,
@@ -36,47 +34,65 @@ export async function registerBarbershopOwner(formData: RegisterFormData) {
   });
 
   if (profileError) {
-  console.error("Erro detalhado do banco:", profileError);
-  return { error: `Erro do banco: ${profileError.message}` };
+    console.error("Erro ao criar perfil:", profileError);
+    return { error: `Erro ao salvar perfil: ${profileError.message}` };
+  }
+
+  return { success: true };
 }
 
-  // Cria um Slug amigável (ex: "Barbearia do Zé" -> "barbearia-do-ze")
-  const slug = formData.fullName
+// --- ETAPA 2: Cadastro da Barbearia ---
+interface RegisterBarbershopData {
+  name: string;
+  document: string;
+}
+
+export async function registerBarbershop(formData: RegisterBarbershopData) {
+  const supabase = await createClient();
+
+  // 1. Pega o usuário logado atual (que acabou de se cadastrar ou logou via Google)
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { error: "Usuário não autenticado. Faça login primeiro." };
+  }
+
+  // 2. Cria um Slug amigável
+  const slug = formData.name
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)+/g, "");
 
-  // Cria a Barbearia (Tenant)
+  // 3. Cria a Barbearia
   const { data: barbershopData, error: barbershopError } = await supabase
     .from("barbershops")
     .insert({
-      name: formData.fullName,
+      name: formData.name,
       slug: slug,
       document: formData.document,
     })
     .select("id")
     .single();
 
- if (barbershopError) {
-  console.error("Erro detalhado da barbearia:", barbershopError);
-  return { error: `Erro na Barbearia: ${barbershopError.message}` };
-}
+  if (barbershopError) {
+    console.error("Erro ao criar barbearia:", barbershopError);
+    return { error: `Erro na Barbearia: ${barbershopError.message}` };
+  }
 
-  // Vincula o Proprietário à Barbearia com a role 'owner' (RBAC)
+  // 4. Vincula o Usuário à Barbearia como 'owner'
   const { error: memberError } = await supabase.from("barbershop_members").insert({
     barbershop_id: barbershopData.id,
-    profile_id: userId,
+    profile_id: user.id,
     role: "owner",
   });
 
- if (memberError) {
-  console.error("Erro detalhado de vínculo:", memberError);
-  return { error: `Erro no Vínculo: ${memberError.message}` };
-}
+  if (memberError) {
+    console.error("Erro ao vincular dono:", memberError);
+    return { error: `Erro no Vínculo: ${memberError.message}` };
+  }
 
-  // Tudo certo! Atualiza o cache da rota e retorna sucesso
   revalidatePath("/");
   return { success: true };
 }

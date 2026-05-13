@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 
@@ -24,9 +23,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       enableSystem
       disableTransitionOnChange
     >
-      <SidebarProvider>
-        {children}
-      </SidebarProvider>
+      {/* Removemos o SidebarProvider daqui. Deixamos apenas o children livre */}
+      {children}
+      
       <Toaster position="top-right" richColors />
     </NextThemesProvider>
   );
