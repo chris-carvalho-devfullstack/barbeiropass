@@ -4,6 +4,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Award, Scissors, Star, Rocket, Lock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
+ export const runtime = 'edge';
+
 export default async function ConquistasPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
