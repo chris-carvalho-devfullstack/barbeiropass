@@ -14,28 +14,22 @@ interface RegisterProfileData {
 export async function registerProfile(formData: RegisterProfileData) {
   const supabase = await createClient();
 
-  // 1. Cria o usuário no Supabase Auth
+  // 1. Cria o usuário no Supabase Auth enviando os dados no options.data
+  // O Gatilho do PostgreSQL interceptará este comando e criará a linha em 'profiles' na hora!
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: formData.email,
     password: formData.password,
+    options: {
+      data: {
+        full_name: formData.fullName,
+        phone: formData.phone,
+        role: "owner"
+      }
+    }
   });
 
   if (authError || !authData.user) {
     return { error: authError?.message || "Erro ao criar conta de autenticação." };
-  }
-
-  const userId = authData.user.id;
-
-  // 2. Insere os dados físicos na tabela 'profiles'
-  const { error: profileError } = await supabase.from("profiles").insert({
-    id: userId,
-    full_name: formData.fullName,
-    phone: formData.phone,
-  });
-
-  if (profileError) {
-    console.error("Erro ao criar perfil:", profileError);
-    return { error: `Erro ao salvar perfil: ${profileError.message}` };
   }
 
   return { success: true };
@@ -50,7 +44,7 @@ interface RegisterBarbershopData {
 export async function registerBarbershop(formData: RegisterBarbershopData) {
   const supabase = await createClient();
 
-  // 1. Pega o usuário logado atual (que acabou de se cadastrar ou logou via Google)
+  // 1. Pega o usuário logado atual
   const { data: { user }, error: userError } = await supabase.auth.getUser();
 
   if (userError || !user) {
@@ -65,7 +59,7 @@ export async function registerBarbershop(formData: RegisterBarbershopData) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)+/g, "");
 
-  // 3. Cria a Barbearia
+  // 3. Cria a Barbearia (Corrigido: apenas um .from() e sem o 'any')
   const { data: barbershopData, error: barbershopError } = await supabase
     .from("barbershops")
     .insert({

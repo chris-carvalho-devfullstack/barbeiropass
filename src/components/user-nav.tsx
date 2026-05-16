@@ -2,142 +2,195 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import Link from "next/link"; // <-- Importamos o Link do Next.js
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { type User as SupabaseUser } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/utils/supabase/client";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { User, LogOut, MonitorSmartphone, Loader2 } from "lucide-react";
+import { User, LogOut, MonitorSmartphone, Loader2, Settings, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
 
+// Função utilitária para pegar apenas primeiro e último nome
+function getFirstAndLastName(fullName: string): string {
+  if (!fullName) return "";
+  const names = fullName.trim().split(/\s+/);
+  if (names.length > 1) {
+    return `${names[0]} ${names[names.length - 1]}`;
+  }
+  return names[0];
+}
+
 export function UserNav() {
+  const router = useRouter();
+  const supabase = createClient();
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  // Busca os dados do usuário autenticado
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) setUser(user);
       setLoading(false);
     });
-  }, []);
+  }, [supabase.auth]);
 
-  // Função de Logout com Redirecionamento
   async function handleLogout() {
-    const toastId = toast.loading("Saindo...");
-    await supabase.auth.signOut();
-    toast.success("Sessão encerrada com sucesso!", { id: toastId });
-    window.location.href = "/login";
+    setIsLoggingOut(true);
+    const toastId = toast.loading("Encerrando sessão...");
+    
+    try {
+      await supabase.auth.signOut();
+      toast.success("Sessão encerrada com segurança!", { id: toastId });
+      router.push("/login");
+    } catch (error) {
+      toast.error("Erro ao tentar sair.", { id: toastId });
+      setIsLoggingOut(false);
+    }
   }
 
-  // Fallbacks de exibição para evitar erros caso os dados não carreguem a tempo
-  const email = user?.email || "carregando...";
-  const nome =
-    user?.user_metadata?.nome_barbearia ||
-    user?.user_metadata?.name ||
+  /// Extração de dados cobrindo todas as chaves possíveis do seu formulário e do Google
+  const email = user?.email || "";
+  const nomeCompleto =
+    user?.user_metadata?.fullName || // Vem do seu formulário de cadastro (Zod)
+    user?.user_metadata?.nome ||     // Outra variação comum em pt-BR
+    user?.user_metadata?.full_name || // Vem do login social (Google)
+    user?.user_metadata?.name ||     // Vem do login social (Google)
+    user?.user_metadata?.nome_barbearia || // Antigo fallback que você tinha
     "Administrador";
-  const iniciais = nome.substring(0, 2).toUpperCase();
+    
+  const displayNameHeader = getFirstAndLastName(nomeCompleto);
   const userId = user?.id?.split("-")[0].toUpperCase() || "------";
+  const userRole = user?.user_metadata?.role || "owner";
+
+  const getRoleDisplay = (role: string) => {
+    switch (role) {
+      case "owner": return { label: "Proprietário", color: "bg-zinc-950 text-white" };
+      case "manager": return { label: "Gerente", color: "bg-zinc-700 text-white" };
+      case "barber": return { label: "Barbeiro", color: "bg-zinc-100 text-zinc-800 border" };
+      case "attendant": return { label: "Atendente", color: "bg-zinc-50 text-zinc-600 border" };
+      default: return { label: role, color: "bg-zinc-100 text-zinc-600" };
+    }
+  };
+
+  const roleDisplay = getRoleDisplay(userRole);
 
   return (
     <DropdownMenu>
+      {/* TRIGGER ATUALIZADO: Agora é um contêiner flexível com Foto e Nome */}
       <DropdownMenuTrigger asChild>
-        {/* Adicionado p-0 e overflow-hidden para a imagem preencher 100% sem bordas internas */}
         <Button
           variant="ghost"
-          className="relative h-10 w-10 rounded-full p-0 overflow-hidden border border-zinc-200"
+          disabled={loading}
+          className="flex items-center gap-3 h-auto px-1.5 py-1.5 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all cursor-pointer focus-visible:ring-zinc-950 dark:focus-visible:ring-zinc-300"
         >
-          {loading ? (
-            <div className="flex h-full w-full items-center justify-center bg-zinc-100">
+          {/* Contêiner da Foto/Avatar */}
+          <div className="relative h-9 w-9 shrink-0 rounded-full ring-1 ring-zinc-200 dark:ring-zinc-700 bg-zinc-50 dark:bg-zinc-900 overflow-hidden flex items-center justify-center">
+            {loading ? (
               <Loader2 className="size-4 animate-spin text-zinc-400" />
-            </div>
-          ) : user?.user_metadata?.avatar_url ? (
-            <Image
-              src={user.user_metadata.avatar_url}
-              alt="Avatar do Usuário"
-              fill
-              sizes="40px"
-              priority
-              className="object-cover"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-white font-bold text-sm hover:opacity-90 transition-all">
-              {iniciais}
+            ) : user?.user_metadata?.avatar_url ? (
+              <Image
+                src={user.user_metadata.avatar_url}
+                alt={displayNameHeader}
+                fill
+                sizes="36px"
+                priority
+                className="object-cover"
+              />
+            ) : (
+              <User className="size-5 text-zinc-500 dark:text-zinc-400" />
+            )}
+          </div>
+
+          {/* Textos no Header (Nome e Role) - Escondido no mobile, visível do sm up */}
+          {!loading && (
+            <div className="hidden sm:flex flex-col items-start leading-tight pr-1">
+              <span className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                {displayNameHeader}
+              </span>
+              <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                {roleDisplay.label}
+              </span>
             </div>
           )}
+          
+          <ChevronsUpDown className="size-4 text-zinc-400 dark:text-zinc-600 ml-1 hidden sm:block" />
         </Button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent
-        className="w-72 p-0 overflow-hidden rounded-xl border-zinc-200"
+        className="w-72 bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-xl rounded-xl p-1.5"
         align="end"
         forceMount
       >
-        <div className="flex items-center gap-3 bg-zinc-900 p-4 text-white">
-          {/* Contêiner relative criado especialmente para a foto maior preencher perfeitamente */}
-          {user?.user_metadata?.avatar_url ? (
-            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2 border-zinc-700">
-              <Image
-                src={user.user_metadata.avatar_url}
-                alt="Avatar do Usuário"
-                fill
-                sizes="48px"
-                className="object-cover"
-              />
-            </div>
-          ) : (
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-white font-bold text-lg border-2 border-zinc-700">
-              {iniciais}
-            </div>
-          )}
-          <div className="flex flex-col space-y-0.5 overflow-hidden">
-            <p className="text-sm font-bold leading-none truncate">{nome}</p>
-            <p className="text-xs text-zinc-400 font-medium leading-none truncate">
-              {email}
+        {/* Cabeçalho do Dropdown (Nome Completo e ID) */}
+        <DropdownMenuLabel className="font-normal p-3">
+          <div className="flex flex-col space-y-1">
+            <p className="text-sm font-bold leading-none text-zinc-950 dark:text-zinc-50 truncate">
+              {nomeCompleto}
             </p>
-            <p className="text-[10px] text-zinc-500 font-mono mt-1">
-              ID: {userId}
-            </p>
+            {email && (
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate pt-1">
+                {email}
+              </p>
+            )}
+            
+            <div className="mt-3 flex items-center gap-2 pt-1.5">
+              <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider shadow-sm ${roleDisplay.color}`}>
+                {roleDisplay.label}
+              </span>
+              <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono font-medium">
+                ID: {userId}
+              </span>
+            </div>
           </div>
-        </div>
+        </DropdownMenuLabel>
 
-        <DropdownMenuSeparator className="m-0" />
+        <DropdownMenuSeparator className="bg-zinc-100 dark:bg-zinc-800" />
 
-        <DropdownMenuGroup className="p-2">
-          {/* Transformado em Link utilizando asChild */}
-          <DropdownMenuItem
-            asChild
-            className="cursor-pointer py-2.5 rounded-lg focus:bg-zinc-100"
-          >
+        <DropdownMenuGroup className="p-1">
+          <DropdownMenuItem asChild className="cursor-pointer gap-2.5 rounded-lg py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 focus:bg-zinc-50 dark:focus:bg-zinc-800">
             <Link href="/perfil">
-              <User className="mr-2 h-4 w-4 text-zinc-600" />
-              <span className="font-medium text-zinc-700">Meu perfil</span>
+              <User className="size-4" />
+              Meu perfil
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem className="cursor-pointer py-2.5 rounded-lg focus:bg-zinc-100">
-            <MonitorSmartphone className="mr-2 h-4 w-4 text-zinc-600" />
-            <span className="font-medium text-zinc-700">
-              Meus dispositivos conectados
-            </span>
+          
+          <DropdownMenuItem asChild className="cursor-pointer gap-2.5 rounded-lg py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 focus:bg-zinc-50 dark:focus:bg-zinc-800">
+            <Link href="/perfil/configuracoes">
+              <Settings className="size-4" />
+              Configurações
+            </Link>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem className="cursor-pointer gap-2.5 rounded-lg py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 focus:bg-zinc-50 dark:focus:bg-zinc-800">
+            <MonitorSmartphone className="size-4" />
+            Acessos e Dispositivos
           </DropdownMenuItem>
         </DropdownMenuGroup>
 
-        <DropdownMenuSeparator className="m-0" />
+        <DropdownMenuSeparator className="bg-zinc-100 dark:bg-zinc-800" />
 
-        <div className="p-2">
+        <div className="p-1">
           <DropdownMenuItem
-            className="cursor-pointer text-red-600 focus:text-red-700 focus:bg-red-50 py-2.5 rounded-lg font-medium"
             onClick={handleLogout}
+            disabled={isLoggingOut || loading}
+            className="cursor-pointer gap-2.5 rounded-lg py-2.5 text-sm font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950 hover:text-red-700 dark:hover:text-red-400 focus:bg-red-50 dark:focus:bg-red-950 focus:text-red-700 dark:focus:text-red-400 transition-colors"
           >
-            <LogOut className="mr-2 h-4 w-4" />
-            <span>Desconectar</span>
+            {isLoggingOut ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <LogOut className="size-4" />
+            )}
+            {isLoggingOut ? "Saindo..." : "Desconectar"}
           </DropdownMenuItem>
         </div>
       </DropdownMenuContent>
