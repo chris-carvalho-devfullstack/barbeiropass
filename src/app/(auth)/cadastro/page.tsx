@@ -19,6 +19,9 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>;
 
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
+
 export default function CadastroPage() {
   const router = useRouter();
   
