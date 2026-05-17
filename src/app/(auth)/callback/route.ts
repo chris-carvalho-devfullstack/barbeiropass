@@ -1,23 +1,28 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@/utils/supabase/server'
+import { NextResponse } from "next/server";
+import { createClient } from "@/utils/supabase/server";
 
- export const runtime = 'edge';
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get('code')
-  // next é o redirecionamento após o login (ex: /dashboard)
-  const next = searchParams.get('next') ?? '/dashboard'
+  const requestUrl = new URL(request.url);
+  const code = requestUrl.searchParams.get("code");
+  const next = requestUrl.searchParams.get("next") ?? "/dashboard";
 
   if (code) {
-    const supabase = await createClient()
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    const supabase = await createClient();
+    
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`)
+      // FIX DA ARQUITETURA: Atraso de 1 segundo
+      // Dá tempo para o seu trigger finalizar e a Read Replica do Supabase sincronizar
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      return NextResponse.redirect(new URL(next, requestUrl.origin));
+    } else {
+      console.error("Erro no callback do Supabase:", error.message);
     }
   }
 
-  // Se der erro, redireciona pro login com aviso
-  return NextResponse.redirect(`${origin}/login?error=auth_failed`)
+  return NextResponse.redirect(new URL("/login?error=auth_failed", requestUrl.origin));
 }

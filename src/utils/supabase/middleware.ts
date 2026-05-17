@@ -14,7 +14,6 @@ export async function updateSession(request: NextRequest) {
         getAll() {
           return request.cookies.getAll()
         },
-        // A mágica anti-falha de build na Cloudflare:
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         setAll(cookiesToSet: any[]) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
@@ -35,21 +34,34 @@ export async function updateSession(request: NextRequest) {
   // Regras de Proteção do SaaS Barbeiropass
   const pathname = request.nextUrl.pathname
   
-  // Define o que é público (Página inicial, login, cadastro, etc)
-  const isPublicRoute = pathname.startsWith('/login') || pathname.startsWith('/cadastro') || pathname === '/'
+  // FIX PRINCIPAL AQUI: Adicionamos o '/callback' na lista de rotas públicas.
+  // Isso permite que o código do Google entre na aplicação e crie a sessão.
+  const isPublicRoute = 
+    pathname.startsWith('/login') || 
+    pathname.startsWith('/cadastro') || 
+    pathname.startsWith('/callback') || 
+    pathname === '/'
 
-  // Se o usuário não estiver logado e tentar acessar uma rota protegida (ex: dashboard)
+  // Se o usuário não estiver logado e tentar acessar uma rota protegida
   if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  // Se o usuário estiver logado e tentar acessar a página de login, manda pro dashboard
+  // Se o usuário estiver logado e tentar acessar a página de login
   if (user && pathname.startsWith('/login')) {
     const url = request.nextUrl.clone()
-    url.pathname = '/dashboard' // Ajustaremos essa rota dinamicamente depois para o Tenant
-    return NextResponse.redirect(url)
+    url.pathname = '/dashboard' 
+    
+    // FIX SECUNDÁRIO: Transfere os cookies da sessão para a resposta de redirecionamento.
+    // Impede que tokens renovados (refresh tokens) sejam descartados pelo Next.js.
+    const redirectResponse = NextResponse.redirect(url)
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value)
+    })
+    
+    return redirectResponse
   }
 
   return supabaseResponse
