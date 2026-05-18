@@ -68,6 +68,8 @@ export default function PerfilPage() {
     carregarPerfil();
   }, [supabase.auth]);
 
+  
+
   async function handleSalvarPerfil(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
