@@ -1,3 +1,4 @@
+// src/components/providers.tsx
 "use client";
 
 import * as React from "react";
@@ -11,7 +12,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
-  // Impede que os provedores de cliente rodem no servidor (SSR)
   if (!mounted) {
     return <>{children}</>;
   }
@@ -19,14 +19,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme="system"
-      enableSystem
+      defaultTheme="light" // <-- Alterado de system para light
+      forcedTheme="light"  // <-- Força o tema light em toda a aplicação
       disableTransitionOnChange
     >
-      {/* Removemos o SidebarProvider daqui. Deixamos apenas o children livre */}
       {children}
-      
-      <Toaster position="top-right" richColors />
+      <Toaster position="top-right" richColors theme="light" /> {/* Força o toaster no light */}
     </NextThemesProvider>
   );
 }

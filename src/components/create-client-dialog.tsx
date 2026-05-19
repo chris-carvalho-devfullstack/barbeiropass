@@ -1,12 +1,13 @@
+// src/components/create-client-dialog.tsx
 "use client";
 
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { createClientAction } from "@/app/(dashboard)/clientes/actions"; // <-- IMPORTANDO A ACTION SEGURA
 
 import { Button } from "@/components/ui/button";
 import {
@@ -28,18 +29,15 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 
-// 1. Ajustamos o schema para refletir os dados de um Cliente
 const formSchema = z.object({
   nome: z.string().min(3, "O nome deve ter pelo menos 3 caracteres"),
   telefone: z.string().min(10, "Informe um telefone válido com DDD"),
 });
 
-// 2. Corrigimos o nome das Props
 interface CreateClientDialogProps {
   onClientCreated: () => void | Promise<void>;
 }
 
-// 3. CORREÇÃO PRINCIPAL DO DEPLOY: Nome correto da função exportada
 export function CreateClientDialog({
   onClientCreated,
 }: CreateClientDialogProps) {
@@ -59,17 +57,14 @@ export function CreateClientDialog({
     const toastId = toast.loading("A guardar cliente...");
 
     try {
-      // 4. Inserimos na tabela correta ("clientes")
-      const { error: dbError } = await supabase.from("clientes").insert([
-        {
-          nome: values.nome,
-          telefone: values.telefone,
-          frequencia: "Novo", // Status inicial padrão
-        },
-      ]);
+      // Chama a Server Action passando os nomes corretos esperados pelo Banco
+      const result = await createClientAction({
+        name: values.nome,
+        phone: values.telefone,
+      });
 
-      if (dbError) {
-        throw new Error(dbError.message);
+      if (result.error) {
+        throw new Error(result.error);
       }
 
       toast.success("Cliente guardado com sucesso!", { id: toastId });
@@ -78,7 +73,6 @@ export function CreateClientDialog({
       onClientCreated();
     } catch (error) {
       console.error("ERRO:", error);
-      // Verifica se o erro possui uma mensagem, senão exibe um texto padrão
       const errorMessage = error instanceof Error ? error.message : "Ocorreu um erro desconhecido.";
       toast.error(`Falha: ${errorMessage}`, { id: toastId });
     } finally {
@@ -101,7 +95,7 @@ export function CreateClientDialog({
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md bg-white">
         <DialogHeader>
           <DialogTitle>Adicionar Cliente</DialogTitle>
           <DialogDescription>
@@ -139,8 +133,8 @@ export function CreateClientDialog({
               )}
             />
 
-            <DialogFooter className="pt-4 mt-4 border-t dark:border-zinc-800">
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+            <DialogFooter className="pt-4 mt-4 border-t border-slate-100">
+              <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...
