@@ -1,5 +1,4 @@
 export const dynamic = "force-dynamic";
-
 export const runtime = 'edge';
 
 import { createClient } from "@/utils/supabase/server";
@@ -62,26 +61,30 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       .maybeSingle();
     
     if (data) {
-      initialQueueData = {
-        id: data.id,
-        status: data.status,
-        barber_name: data.barber_name,
-        chair_number: data.chair_number,
-        is_rated: data.is_rated || false,
-      };
+      // >>> A CORREÇÃO MÁGICA ESTÁ AQUI <<<
+      // Se o status for 'finished' e JÁ FOI AVALIADO (is_rated = true), nós ignoramos!
+      // Tratamos como se ele não estivesse na fila, para a tela abrir limpa.
+      if (!(data.status === "finished" && data.is_rated === true)) {
+        initialQueueData = {
+          id: data.id,
+          status: data.status,
+          barber_name: data.barber_name,
+          chair_number: data.chair_number,
+          is_rated: data.is_rated || false,
+        };
 
-      // Se estiver aguardando, calcula a posição exata na fila
-      if (data.status === "waiting") {
-        const { data: waitingList } = await supabase
-          .from("virtual_queue")
-          .select("id")
-          .eq("barbershop_id", barbershop.id)
-          .eq("status", "waiting")
-          .order("joined_at", { ascending: true }); // Ordena por quem chegou primeiro
+        if (data.status === "waiting") {
+          const { data: waitingList } = await supabase
+            .from("virtual_queue")
+            .select("id")
+            .eq("barbershop_id", barbershop.id)
+            .eq("status", "waiting")
+            .order("joined_at", { ascending: true }); 
 
-        if (waitingList) {
-          const index = waitingList.findIndex(item => item.id === data.id);
-          if (index !== -1) initialUserPosition = index + 1; // +1 porque arrays começam em 0
+          if (waitingList) {
+            const index = waitingList.findIndex(item => item.id === data.id);
+            if (index !== -1) initialUserPosition = index + 1; 
+          }
         }
       }
     }
@@ -124,7 +127,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
               isLocal={isLocal}
               initialWaitingCount={initialWaitingCount}
               initialQueueData={initialQueueData}
-              initialUserPosition={initialUserPosition} // Passamos a posição inicial para o formulário
+              initialUserPosition={initialUserPosition} 
             />
           </div>
         </div>

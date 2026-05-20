@@ -135,8 +135,11 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
       
       if (result.error) {
         toast.error(result.error);
-        setLoading(false);
       }
+      
+      // CORREÇÃO: Desligar o estado de loading independente do resultado.
+      // Se der sucesso, o Supabase Realtime cuidará de atualizar a UI instantaneamente!
+      setLoading(false);
     } catch (error) {
       toast.error("Erro de conexão. Tente novamente.");
       setLoading(false);
@@ -207,15 +210,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     } finally {
       setIsSubmittingReview(false);
     }
-  };
-
-  const resetToJoin = () => {
-    setCurrentStatus(null);
-    setQueueId(null);
-    setHasRated(false);
-    setBarberRating(0);
-    setBarbershopRating(0);
-    setReviewComment("");
   };
 
   return (
@@ -305,10 +299,8 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
                
                {isLocal ? (
                  <div className="w-full space-y-4 pt-4 border-t border-slate-100">
-                    <div className="flex justify-center w-full min-h-16.25">
-                      <Turnstile siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
-                    </div>
-                    <Button onClick={() => { resetToJoin(); }} className="w-full h-16 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-black text-lg shadow-lg transition-all active:scale-[0.98]">
+                    {/* CORREÇÃO: O widget do Turnstile foi removido daqui pois o reload reseta a página inteira limpa */}
+                    <Button onClick={() => window.location.reload()} className="w-full h-16 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-black text-lg shadow-lg transition-all active:scale-[0.98]">
                       Quero entrar na fila novamente
                     </Button>
                  </div>
