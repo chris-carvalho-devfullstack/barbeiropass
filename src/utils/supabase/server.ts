@@ -1,3 +1,4 @@
+// src/utils/supabase/server.ts
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
@@ -22,6 +23,12 @@ export async function createClient() {
             // pois o Middleware é quem cuidará de renovar a sessão na prática.
           }
         },
+      },
+      // ADIÇÃO CRÍTICA PARA A CLOUDFLARE PAGES:
+      // Força o Supabase a usar a API de fetch nativa do Edge Runtime
+      // em vez de tentar usar bibliotecas legadas do Node.js.
+      global: {
+        fetch: fetch,
       },
     }
   )

@@ -1,5 +1,8 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+export const runtime = "edge"; // <-- ADICIONAR AQUI
+
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { updateQueueStatusAction, addManualClientAction, generateNewPinAction, getBarbershopPinAction } from "./actions";
