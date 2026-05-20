@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, Users, Clock, Scissors, Star, MessageSquare, BellRing } from "lucide-react"; 
 import { type User } from "@supabase/supabase-js"; 
-import { joinPublicQueueAction, verifyCheckinPinAction } from "./actions"; 
+import { joinPublicQueueAction, verifyCheckinPinAction } from "../../../../actions/actions"; 
 import { submitReviewAction } from "@/app/(dashboard)/fila/actions"; 
 import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
 
