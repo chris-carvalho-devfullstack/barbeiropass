@@ -1,6 +1,6 @@
 "use server";
 
-export const runtime = "edge";
+
 
 import { createClient } from "@/utils/supabase/server";
 import { z } from "zod";
