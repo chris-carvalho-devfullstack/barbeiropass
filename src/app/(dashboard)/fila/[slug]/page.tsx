@@ -27,6 +27,8 @@ interface ClientSuggestion {
   document?: string | null;
 }
 
+export const runtime = 'edge';
+
 export default function PublicQueuePage() {
   const params = useParams() as { slug: string };
   

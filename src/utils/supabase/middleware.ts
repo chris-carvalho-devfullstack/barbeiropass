@@ -34,12 +34,13 @@ export async function updateSession(request: NextRequest) {
   // Regras de Proteção do SaaS Barbeiropass
   const pathname = request.nextUrl.pathname
   
-  // FIX PRINCIPAL AQUI: Adicionamos o '/callback' na lista de rotas públicas.
-  // Isso permite que o código do Google entre na aplicação e crie a sessão.
+  // FIX PRINCIPAL AQUI: Adicionamos o '/callback' e o '/b/' na lista de rotas públicas.
+  // Isso permite que o código do Google entre na aplicação, crie a sessão e libera a fila pública.
   const isPublicRoute = 
     pathname.startsWith('/login') || 
     pathname.startsWith('/cadastro') || 
     pathname.startsWith('/callback') || 
+    pathname.startsWith('/b/') || // <-- ROTA DA FILA PÚBLICA LIBERADA AQUI
     pathname === '/'
 
   // Se o usuário não estiver logado e tentar acessar uma rota protegida

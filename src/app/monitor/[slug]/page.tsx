@@ -11,6 +11,7 @@ interface QueueItem {
   status: "waiting" | "in_progress" | "finished";
   joined_at: string;
 }
+export const runtime = 'edge';
 
 export default function PublicMonitorPage() {
   const params = useParams();

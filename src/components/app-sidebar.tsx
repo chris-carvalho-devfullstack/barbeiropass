@@ -10,6 +10,8 @@ import {
   Settings,
   Package,
   Calendar,
+  ListOrdered, // <-- NOVO Ícone para a Fila
+  Calculator,  // <-- NOVO Ícone para o PDV
 } from "lucide-react";
 
 import {
@@ -23,12 +25,15 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  useSidebar, // 1. Adicionamos a importação do hook useSidebar
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+// 1. Atualizamos a lista de itens do menu aqui
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "PDV", url: "/pdv", icon: Calculator },           // <-- ADICIONADO AQUI
+  { title: "Fila Virtual", url: "/fila", icon: ListOrdered }, // <-- ADICIONADO AQUI
   { title: "Agenda", url: "/agendamentos", icon: Calendar },
   { title: "Serviços", url: "/servicos", icon: Scissors },
   { title: "Produtos", url: "#", icon: Package },
@@ -40,7 +45,6 @@ const items = [
 export function AppSidebar() {
   const [mounted, setMounted] = React.useState(false);
   
-  // 2. Extraímos o estado (state) atual do menu lateral
   const { state } = useSidebar();
 
   React.useEffect(() => {
@@ -51,7 +55,6 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      {/* 3. Ajustamos as classes baseadas no estado e fazemos a renderização condicional */}
       <SidebarHeader 
         className={`flex h-16 items-center border-b transition-all ${
           state === "expanded" ? "px-4" : "justify-center px-0"
@@ -62,7 +65,7 @@ export function AppSidebar() {
             Barbeiro<span className="text-zinc-500">Pass</span>
           </span>
         ) : (
-          <Scissors className="size-6 shrink-0" /> // O Ícone substituto (futura logo)
+          <Scissors className="size-6 shrink-0" />
         )}
       </SidebarHeader>
 

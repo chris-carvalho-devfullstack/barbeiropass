@@ -2,57 +2,36 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { updateQueueStatusAction } from "./actions";
+import { updateQueueStatusAction, addManualClientAction, generateNewPinAction, getBarbershopPinAction } from "./actions";
 import { QRCodeSVG } from "qrcode.react";
 import { 
-  Users, 
-  Play, 
-  CheckCircle2, 
-  XCircle, 
-  QrCode, 
-  Loader2, 
-  UserCheck, 
-  Monitor // <-- ADICIONADO AQUI
+  Users, Play, CheckCircle2, XCircle, QrCode, Loader2, UserCheck, Monitor, RefreshCw, UserPlus 
 } from "lucide-react";
 import { toast } from "sonner";
-
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
-// =========================================================================
-// TIPAGENS
-// =========================================================================
+// Tipagens...
 type QueueStatus = "waiting" | "in_progress" | "finished" | "cancelled";
-
-interface QueueItem {
-  id: string;
-  client_name: string;
-  client_id: string | null;
-  status: "waiting" | "in_progress";
-  joined_at: string;
-}
-
-interface BarbershopInfo {
-  id: string;
-  slug: string;
-}
-
-interface MemberResponse {
-  barbershop_id: string;
-  barbershops: {
-    slug: string;
-  } | null;
-}
+interface QueueItem { id: string; client_name: string; client_id: string | null; status: "waiting" | "in_progress"; joined_at: string; }
+interface BarbershopInfo { id: string; slug: string; }
+interface MemberResponse { barbershop_id: string; barbershops: { slug: string; } | null; }
 
 export default function FilaDashboard() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [barbershop, setBarbershop] = useState<BarbershopInfo | null>(null);
+  
+  // Novos estados para a Torre de Comando
+  const [currentPin, setCurrentPin] = useState<string>("----");
+  const [manualName, setManualName] = useState("");
+  const [isAddingManual, setIsAddingManual] = useState(false);
+  const [isGeneratingPin, setIsGeneratingPin] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
 
+  // Fetch da Fila (também utilizado pelo Realtime)
   const fetchQueue = useCallback(async (bid: string) => {
-    setLoading(true);
     try {
       const { data, error } = await supabase
         .from("virtual_queue")
@@ -66,13 +45,13 @@ export default function FilaDashboard() {
     } catch (error) {
       console.error(error);
       toast.error("Erro ao carregar a lista da fila.");
-    } finally {
-      setLoading(false);
     }
   }, [supabase]);
 
+  // Fetch Inicial (Barbearia, PIN e Fila)
   useEffect(() => {
     async function loadData() {
+      setLoading(true);
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -84,44 +63,104 @@ export default function FilaDashboard() {
           .single();
 
         const member = data as unknown as MemberResponse;
-
         if (error) throw error;
 
         if (member && member.barbershops) {
-          const info = { 
-            id: member.barbershop_id, 
-            slug: member.barbershops.slug 
-          };
+          const info = { id: member.barbershop_id, slug: member.barbershops.slug };
           setBarbershop(info);
-          fetchQueue(info.id);
+          await fetchQueue(info.id);
+          
+          // Busca o PIN Atual
+          const pinResult = await getBarbershopPinAction(info.id);
+          setCurrentPin(pinResult.pin);
         }
       } catch (error) {
         console.error(error);
         toast.error("Erro ao carregar dados da barbearia.");
+      } finally {
+        setLoading(false);
       }
     }
     loadData();
   }, [supabase, fetchQueue]);
 
+  // ==========================================
+  // REALTIME SUBCRIPTION
+  // ==========================================
+  useEffect(() => {
+    if (!barbershop?.id) return;
+
+    // Escuta ativa para atualizar o dashboard quando um cliente entrar pela página pública
+    const channel = supabase
+      .channel(`dashboard-queue-${barbershop.id}`)
+      .on(
+        "postgres_changes", 
+        { event: "*", schema: "public", table: "virtual_queue", filter: `barbershop_id=eq.${barbershop.id}` }, 
+        () => {
+          fetchQueue(barbershop.id);
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [barbershop?.id, fetchQueue, supabase]);
+
+  // ==========================================
+  // HANDLERS DE AÇÕES DO BARBEIRO
+  // ==========================================
+
+  // 1. Mudar o estado de um cliente
   async function handleStatus(id: string, status: QueueStatus) {
+    // Apenas optimização visual (optimistic update), o realtime tratará de sincronizar caso falhe
     const res = await updateQueueStatusAction(id, status);
     if (res.success) {
-      toast.success("Fila atualizada!");
-      if (barbershop) {
-        fetchQueue(barbershop.id);
-      }
+      toast.success(status === 'finished' ? "Finalizado!" : "Fila atualizada!");
+      if (barbershop) fetchQueue(barbershop.id);
     } else {
       toast.error(res.error || "Erro ao atualizar.");
     }
   }
 
+  // 2. Adicionar cliente manualmente ("Sem Telemóvel")
+  async function handleAddManual(e: React.FormEvent) {
+    e.preventDefault();
+    if (!manualName.trim() || !barbershop) return;
+    
+    setIsAddingManual(true);
+    const res = await addManualClientAction(barbershop.id, manualName);
+    if (res.success) {
+      toast.success(`${manualName} entrou na fila!`);
+      setManualName("");
+      // O realtime tratará de chamar fetchQueue
+    } else {
+      toast.error(res.error || "Erro ao adicionar cliente.");
+    }
+    setIsAddingManual(false);
+  }
+
+  // 3. Gerar um novo PIN de Segurança
+  async function handleGeneratePin() {
+    if (!barbershop) return;
+    setIsGeneratingPin(true);
+    const res = await generateNewPinAction(barbershop.id);
+    if (res.success && res.newPin) {
+      setCurrentPin(res.newPin);
+      toast.success(`Novo PIN gerado: ${res.newPin}`);
+    } else {
+      toast.error(res.error || "Erro ao gerar PIN.");
+    }
+    setIsGeneratingPin(false);
+  }
+
   const qrUrl = useMemo(() => {
     if (typeof window === "undefined" || !barbershop?.slug) return "";
-    return `${window.location.origin}/fila/${barbershop.slug}`;
+    return `${window.location.origin}/b/${barbershop.slug}?origem=balcao`;
   }, [barbershop?.slug]);
 
   return (
     <div className="p-4 md:p-6 space-y-6 bg-slate-50 min-h-screen">
+      
+      {/* HEADER PRINCIPAL */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-white rounded-2xl shadow-sm">
@@ -136,46 +175,65 @@ export default function FilaDashboard() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* BOTÃO DO MONITOR (NOVO) */}
-          <Button 
-  variant="outline"
-  onClick={() => window.open(`/monitor/${barbershop?.slug}`, '_blank')} // URL atualizada
-  className="border-slate-200 text-slate-600 gap-2 rounded-xl h-12 px-6 font-bold hover:bg-slate-100 hidden md:flex"
->
-  <Monitor className="size-5" /> Monitor (TV)
-</Button>
+          <Button variant="outline" onClick={() => window.open(`/monitor/${barbershop?.slug}`, '_blank')} className="border-slate-200 text-slate-600 gap-2 rounded-xl h-12 px-6 font-bold hover:bg-slate-100 hidden md:flex">
+            <Monitor className="size-5" /> Monitor (TV)
+          </Button>
 
-          {/* Modal do QR Code */}
           <Dialog>
             <DialogTrigger asChild>
               <Button className="bg-slate-900 hover:bg-slate-800 text-white gap-2 rounded-xl h-12 px-6 font-bold shadow-lg transition-all active:scale-95">
-                <QrCode className="size-5" /> Totem
+                <QrCode className="size-5" /> Totem & PIN
               </Button>
             </DialogTrigger>
             <DialogContent className="bg-white rounded-3xl border-0 shadow-2xl sm:max-w-sm">
               <DialogHeader className="text-center pt-4">
-                <DialogTitle className="text-2xl font-black text-slate-900">Totem de Autoatendimento</DialogTitle>
+                <DialogTitle className="text-2xl font-black text-slate-900">Acesso Presencial</DialogTitle>
               </DialogHeader>
               <div className="flex flex-col items-center p-6 gap-6">
-                <div className="p-4 bg-white border-8 border-slate-50 rounded-[2rem] shadow-inner">
-                  {qrUrl && <QRCodeSVG value={qrUrl} size={200} />}
+                
+                {/* O PIN e o Gerador */}
+                <div className="w-full bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">PIN Atual</p>
+                    <p className="text-3xl font-black text-slate-900 tracking-[0.2em]">{currentPin}</p>
+                  </div>
+                  <Button onClick={handleGeneratePin} disabled={isGeneratingPin} variant="outline" className="h-12 w-12 p-0 rounded-xl border-slate-200">
+                    <RefreshCw className={`size-5 text-slate-600 ${isGeneratingPin ? 'animate-spin' : ''}`} />
+                  </Button>
                 </div>
-                <p className="text-center text-slate-500 font-medium text-sm leading-relaxed">
-                  O cliente entra na fila pelo próprio celular escaneando este código.
+
+                <div className="p-4 bg-white border-8 border-slate-50 rounded-[2rem] shadow-inner">
+                  {qrUrl && <QRCodeSVG value={qrUrl} size={180} />}
+                </div>
+                <p className="text-center text-slate-500 font-medium text-xs leading-relaxed">
+                  O cliente escaneia o QR Code ou digita o PIN no seu próprio celular.
                 </p>
-                <Button 
-                  onClick={() => window.print()} 
-                  className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black shadow-lg"
-                >
-                  Imprimir QR Code
-                </Button>
               </div>
             </DialogContent>
           </Dialog>
         </div>
       </div>
 
-      {/* Lista da Fila */}
+      {/* BLOCO: CONTROLE RÁPIDO (Adicionar Manual) */}
+      <div className="bg-white p-2 pl-4 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between gap-4 max-w-xl">
+        <div className="flex items-center gap-3 w-full">
+          <UserPlus className="text-slate-400 size-5" />
+          <form onSubmit={handleAddManual} className="w-full flex">
+            <input 
+              type="text" 
+              placeholder="Adicionar cliente sem telemóvel..." 
+              value={manualName}
+              onChange={(e) => setManualName(e.target.value)}
+              className="w-full bg-transparent border-0 focus:ring-0 text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+            />
+            <Button type="submit" disabled={isAddingManual || !manualName.trim()} className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl h-10 px-6 font-bold shadow-sm shrink-0">
+              {isAddingManual ? <Loader2 className="size-4 animate-spin" /> : "Adicionar"}
+            </Button>
+          </form>
+        </div>
+      </div>
+
+      {/* LISTA DA FILA */}
       <div className="grid gap-4">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
@@ -203,7 +261,7 @@ export default function FilaDashboard() {
                     {item.client_id && (
                       <div className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-0.5 rounded-lg border border-blue-100 pointer-events-none">
                         <UserCheck className="size-3" />
-                        <span className="text-[10px] font-black uppercase tracking-tight">Fiel</span>
+                        <span className="text-[10px] font-black uppercase tracking-tight">App</span>
                       </div>
                     )}
                   </div>
@@ -221,13 +279,14 @@ export default function FilaDashboard() {
                 </div>
               </div>
               
+              {/* Controles do Barbeiro */}
               <div className="flex gap-2">
                 {item.status === 'waiting' && (
                   <Button 
                     variant="ghost" 
                     onClick={() => handleStatus(item.id, 'in_progress')} 
                     className="text-blue-600 hover:bg-blue-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                    title="Iniciar Atendimento"
+                    title="Chamar para Cadeira"
                   >
                     <Play className="size-6 fill-current" />
                   </Button>
@@ -236,7 +295,7 @@ export default function FilaDashboard() {
                   variant="ghost" 
                   onClick={() => handleStatus(item.id, 'finished')} 
                   className="text-emerald-600 hover:bg-emerald-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                  title="Concluir"
+                  title="Finalizar Atendimento"
                 >
                   <CheckCircle2 className="size-6" />
                 </Button>
@@ -244,7 +303,7 @@ export default function FilaDashboard() {
                   variant="ghost" 
                   onClick={() => handleStatus(item.id, 'cancelled')} 
                   className="text-slate-300 hover:text-red-500 hover:bg-red-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                  title="Remover"
+                  title="Remover da Fila"
                 >
                   <XCircle className="size-6" />
                 </Button>

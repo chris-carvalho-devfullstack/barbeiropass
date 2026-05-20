@@ -7,27 +7,33 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
+  
+  // Captura o parâmetro 'next' (ex: /b/barbearia-do-ze)
+  const next = requestUrl.searchParams.get("next");
 
   if (code) {
     const supabase = await createClient();
     
-    // Troca o código de acesso por uma sessão válida
+    // Troca o código de acesso por uma sessão válida apenas UMA vez no servidor
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (!error) {
-      // FIX DA ARQUITETURA: Atraso de 1 segundo
-      // Dá tempo para o seu trigger finalizar e a Read Replica do Supabase sincronizar
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // ============================================================================
+      // 1. DESVIO PARA CLIENTES (FILA VIRTUAL)
+      // ============================================================================
+      // Se existe um parâmetro 'next', significa que o login veio de uma página pública (ex: Fila).
+      // Redirecionamos o utilizador de volta para lá imediatamente.
+      if (next) {
+        return NextResponse.redirect(new URL(next, requestUrl.origin));
+      }
 
       // ============================================================================
-      // BLINDAGEM ZERO TRUST: ROTEAMENTO BASEADO NO ESTADO REAL DO BANCO
+      // 2. LÓGICA ORIGINAL PARA DONOS DE BARBEARIA
       // ============================================================================
-      
-      // 1. Consulta segura da identidade do usuário diretamente no servidor
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (user && !userError) {
-        // 2. Verifica se o usuário já possui um vínculo de dono/membro com alguma barbearia
         const { data: existingMember, error: memberError } = await supabase
           .from("barbershop_members")
           .select("id")
@@ -40,24 +46,17 @@ export async function GET(request: Request) {
           return NextResponse.redirect(new URL("/login?error=auth_failed", requestUrl.origin));
         }
 
-        // 3. Tomada de Decisão de Rota
         if (existingMember) {
-          // O usuário JÁ POSSUI barbearia. 
-          // Bloqueamos qualquer tentativa de ir para a tela de cadastro e forçamos o dashboard.
           return NextResponse.redirect(new URL("/dashboard", requestUrl.origin));
         } else {
-          // O usuário NÃO POSSUI barbearia. 
-          // Independentemente de onde ele clicou para logar, forçamos o onboarding.
           return NextResponse.redirect(new URL("/cadastro/barbearia", requestUrl.origin));
         }
       }
-      
-      // ============================================================================
     } else {
       console.error("[SECURITY LOG] Erro na troca de código do Supabase:", error.message);
     }
   }
 
-  // Falha na autenticação ou ausência de código redireciona com aviso de erro
+  // Falha na autenticação ou ausência de código
   return NextResponse.redirect(new URL("/login?error=auth_failed", requestUrl.origin));
 }
