@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, Users, Clock, Scissors, Star, MessageSquare, BellRing } from "lucide-react"; 
 import { type User } from "@supabase/supabase-js"; 
-import { joinPublicQueueAction, verifyCheckinPinAction } from "../../../../actions/actions"; 
+// ATUALIZADO: verifyCheckinPinAction removido das importações
+import { joinPublicQueueAction } from "../../../../actions/actions"; 
 import { submitReviewAction } from "@/app/(dashboard)/fila/actions"; 
 import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
 
@@ -61,7 +62,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
   const estimatedWaitTime = waitingCount * 20;
 
-  // Busca a lista ordenada atualizada para recalcular contagem e posições dinamicamente
   const updateGlobalCountAndPosition = useCallback(async () => {
     const { data: waitingList } = await supabase
       .from("virtual_queue")
@@ -103,7 +103,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
               setInQueue(newRow.status !== "finished");
             }
           }
-          // Recalcula a fila inteira para atualizar a posição sempre que alguém entrar ou sair
           updateGlobalCountAndPosition();
         }
       )
@@ -135,12 +134,30 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     }
   };
 
+  // ATUALIZADO: Função refatorada para usar fetch chamando a API Route
   const handleVerifyPin = async () => {
     if (!manualPin || manualPin.length < 4) return;
     setVerifyingPin(true);
-    const result = await verifyCheckinPinAction(barbershopId, manualPin);
-    if (result.success) window.location.assign(`${window.location.pathname}?origem=balcao`);
-    else { toast.error(result.error); setVerifyingPin(false); }
+    
+    try {
+      const res = await fetch('/api/verify-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barbershopId, providedPin: manualPin })
+      });
+      
+      const result = await res.json();
+
+      if (result.success) {
+        window.location.assign(`${window.location.pathname}?origem=balcao`);
+      } else {
+        toast.error(result.error);
+        setVerifyingPin(false);
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+      setVerifyingPin(false);
+    }
   };
 
   const handleSubmitReview = async () => {
