@@ -15,7 +15,7 @@ interface QueueFormProps {
   user: User | null; 
   isLocal: boolean;
   initialWaitingCount: number;
-  initialQueueData: { id: string; status: string; barber_name: string | null; chair_number: string | null; is_rated: boolean } | null;
+  initialQueueData: { id: string; status: string; barber_name: string | null; chair_number: string | null; is_rated: boolean; joined_at: string | null } | null;
   initialUserPosition: number | null;
 }
 
@@ -27,6 +27,7 @@ interface QueueRowPayload {
   barber_name: string | null;
   chair_number: string | null;
   is_rated: boolean;
+  joined_at: string | null;
 }
 
 export default function QueueForm({ barbershopId, barbershopName, user, isLocal, initialWaitingCount, initialQueueData, initialUserPosition }: QueueFormProps) {
@@ -39,6 +40,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const [barberName, setBarberName] = useState<string | null>(initialQueueData?.barber_name || null);
   const [chairNumber, setChairNumber] = useState<string | null>(initialQueueData?.chair_number || null);
   const [hasRated, setHasRated] = useState<boolean>(!!initialQueueData?.is_rated);
+  const [joinedAt, setJoinedAt] = useState<string | null>(initialQueueData?.joined_at || null);
 
   const [barberRating, setBarberRating] = useState(0);
   const [hoverBarberRating, setHoverBarberRating] = useState(0);
@@ -58,6 +60,19 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const supabase = createClient(); 
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
   const estimatedWaitTime = waitingCount * 20;
+
+  // Função auxiliar para formatação cronológica exata baseada em Brasília
+  const formatDateTime = (isoString: string | null) => {
+    if (!isoString) return "";
+    return new Date(isoString).toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "America/Sao_Paulo"
+    });
+  };
 
   const updateGlobalCountAndPosition = useCallback(async () => {
     const { data: waitingList } = await supabase
@@ -97,6 +112,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
               setBarberName(newRow.barber_name);
               setChairNumber(newRow.chair_number);
               setHasRated(newRow.is_rated);
+              setJoinedAt(newRow.joined_at);
               setInQueue(newRow.status !== "finished");
             }
           }
@@ -121,24 +137,17 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
       toast.error("Aguarde a validação de segurança..."); 
       return; 
     }
-    
     setLoading(true);
-    
     try {
       const res = await fetch('/api/join-queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ barbershopId, turnstileToken })
       });
-      
       const result = await res.json();
-      
       if (result.error) {
         toast.error(result.error);
       }
-      
-      // CORREÇÃO: Desligar o estado de loading independente do resultado.
-      // Se der sucesso, o Supabase Realtime cuidará de atualizar a UI instantaneamente!
       setLoading(false);
     } catch (error) {
       toast.error("Erro de conexão. Tente novamente.");
@@ -157,16 +166,13 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const handleVerifyPin = async () => {
     if (!manualPin || manualPin.length < 4) return;
     setVerifyingPin(true);
-    
     try {
       const res = await fetch('/api/verify-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ barbershopId, providedPin: manualPin })
       });
-      
       const result = await res.json();
-
       if (result.success) {
         window.location.assign(`${window.location.pathname}?origem=balcao`);
       } else {
@@ -182,7 +188,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const handleSubmitReview = async () => {
     if (!queueId || barberRating === 0 || barbershopRating === 0) return;
     setIsSubmittingReview(true);
-    
     try {
       const res = await fetch('/api/submit-review', {
         method: 'POST',
@@ -196,9 +201,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
           comment: reviewComment
         })
       });
-      
       const result = await res.json();
-      
       if (result.success) {
         toast.success("Obrigado pela sua avaliação!");
         setHasRated(true); 
@@ -292,14 +295,18 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
                <div className="h-16 w-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center">
                  <CheckCircle2 size={32} />
                </div>
-               <div className="text-center">
+               <div className="text-center px-4">
                  <h3 className="font-black text-slate-900 text-xl">Tudo pronto!</h3>
-                 <p className="text-sm text-slate-500 font-medium mt-1">Último atendimento: {barberName}</p>
+                 {/* TEXTO ATUALIZADO: Totalmente personalizado com dados cronológicos do próprio usuário */}
+                 <p className="text-sm text-slate-500 font-medium mt-3 max-w-xs mx-auto leading-relaxed">
+                   Seu último atendimento foi com o profissional <span className="font-bold text-slate-800">{barberName || "Barbeiro"}</span> em <span className="font-bold text-slate-800">{formatDateTime(joinedAt)}</span>.
+                   <br /><br />
+                   Ficamos felizes por escolher a <span className="font-bold text-blue-600">{barbershopName}</span>!
+                 </p>
                </div>
                
                {isLocal ? (
                  <div className="w-full space-y-4 pt-4 border-t border-slate-100">
-                    {/* CORREÇÃO: O widget do Turnstile foi removido daqui pois o reload reseta a página inteira limpa */}
                     <Button onClick={() => window.location.reload()} className="w-full h-16 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-black text-lg shadow-lg transition-all active:scale-[0.98]">
                       Quero entrar na fila novamente
                     </Button>
@@ -332,8 +339,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
             </div>
           ) : (
             <div className="space-y-4 animate-in fade-in flex flex-col items-center py-2">
-              
-              {/* LÓGICA DE POSIÇÃO DINÂMICA */}
               {userPosition === 1 ? (
                  <>
                    <div className="h-16 w-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-2 shadow-inner animate-pulse ring-4 ring-blue-50">
@@ -355,7 +360,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
                    </p>
                  </>
               )}
-
             </div>
           )}
           <button onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">

@@ -1,6 +1,7 @@
 // src/app/api/join-queue/route.ts
 export const runtime = 'edge'; // OBRIGATÓRIO NA CLOUDFLARE
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -96,6 +97,11 @@ export async function POST(req: Request) {
     if (insertError) {
       return NextResponse.json({ error: "Ocorreu um erro ao registar a sua posição. Tente novamente." }, { status: 500 });
     }
+
+    // 7. Limpa o cache em tempo real para refletir a nova fila em todos os lugares
+    revalidatePath("/b/[slug]", "page");
+    revalidatePath("/fila", "page"); 
+    revalidatePath("/pdv", "page");
 
     return NextResponse.json({ success: true });
 

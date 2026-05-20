@@ -18,6 +18,7 @@ type InitialQueueData = {
   barber_name: string | null;
   chair_number: string | null;
   is_rated: boolean;
+  joined_at: string | null; // Adicionado para controle de data/hora
 };
 
 export default async function PublicBarbershopPage({ params, searchParams }: PageProps) {
@@ -52,7 +53,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
   if (user) {
     const { data } = await supabase
       .from("virtual_queue")
-      .select("id, status, barber_name, chair_number, is_rated")
+      .select("id, status, barber_name, chair_number, is_rated, joined_at")
       .eq("barbershop_id", barbershop.id)
       .eq("client_auth_id", user.id)
       .in("status", ["waiting", "in_progress", "finished"])
@@ -61,9 +62,6 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       .maybeSingle();
     
     if (data) {
-      // >>> A CORREÇÃO MÁGICA ESTÁ AQUI <<<
-      // Se o status for 'finished' e JÁ FOI AVALIADO (is_rated = true), nós ignoramos!
-      // Tratamos como se ele não estivesse na fila, para a tela abrir limpa.
       if (!(data.status === "finished" && data.is_rated === true)) {
         initialQueueData = {
           id: data.id,
@@ -71,6 +69,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
           barber_name: data.barber_name,
           chair_number: data.chair_number,
           is_rated: data.is_rated || false,
+          joined_at: data.joined_at, // Mapeado aqui
         };
 
         if (data.status === "waiting") {
