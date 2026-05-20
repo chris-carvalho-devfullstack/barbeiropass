@@ -4,7 +4,7 @@ export const runtime = 'edge'; // OBRIGATÓRIO NA CLOUDFLARE
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 // 1. IMPORTAÇÃO NOVA PARA LIMPAR O CACHE
-import { revalidatePath } from "next/cache"; 
+ 
 
 export async function POST(req: Request) {
   try {
@@ -53,8 +53,8 @@ export async function POST(req: Request) {
     // 2. >>> A MÁGICA QUE RESOLVE O BUG <<<
     // Dizemos ao Next.js para limpar o cache da página da barbearia
     // Assim, ao dar reload, a página verá que `is_rated` é true e pulará essa avaliação.
-    revalidatePath("/b/[slug]", "page");
-    revalidatePath("/fila"); // Limpa o cache do painel do barbeiro também
+    
+    
     
     return NextResponse.json({ success: true });
     
