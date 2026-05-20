@@ -7,9 +7,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, Users, Clock, Scissors, Star, MessageSquare, BellRing } from "lucide-react"; 
 import { type User } from "@supabase/supabase-js"; 
-// ATUALIZADO: verifyCheckinPinAction removido das importações
-import { joinPublicQueueAction } from "../../../../actions/actions"; 
-import { submitReviewAction } from "@/app/(dashboard)/fila/actions"; 
 import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
 
 interface QueueFormProps {
@@ -120,10 +117,30 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const handleLogout = async () => { setLoading(true); await supabase.auth.signOut(); window.location.reload(); };
 
   const handleJoinQueue = async () => {
-    if (!turnstileToken) { toast.error("Aguarde a validação de segurança..."); return; }
+    if (!turnstileToken) { 
+      toast.error("Aguarde a validação de segurança..."); 
+      return; 
+    }
+    
     setLoading(true);
-    const result = await joinPublicQueueAction({ barbershopId, turnstileToken });
-    if (result?.error) { toast.error(result.error); setLoading(false); }
+    
+    try {
+      const res = await fetch('/api/join-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barbershopId, turnstileToken })
+      });
+      
+      const result = await res.json();
+      
+      if (result.error) {
+        toast.error(result.error);
+        setLoading(false);
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+      setLoading(false);
+    }
   };
 
   const handleScanSuccess = (detectedCodes: IDetectedBarcode[]) => {
@@ -134,7 +151,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     }
   };
 
-  // ATUALIZADO: Função refatorada para usar fetch chamando a API Route
   const handleVerifyPin = async () => {
     if (!manualPin || manualPin.length < 4) return;
     setVerifyingPin(true);
@@ -164,17 +180,33 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     if (!queueId || barberRating === 0 || barbershopRating === 0) return;
     setIsSubmittingReview(true);
     
-    const res = await submitReviewAction(
-      queueId, barbershopId, barberName, barberRating, barbershopRating, reviewComment
-    ); 
-    
-    if (res.success) {
-      toast.success("Obrigado pela sua avaliação!");
-      setHasRated(true);
-    } else {
-      toast.error("Erro ao enviar avaliação.");
+    try {
+      const res = await fetch('/api/submit-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queueId,
+          barbershopId,
+          barberName,
+          barberRating,
+          barbershopRating,
+          comment: reviewComment
+        })
+      });
+      
+      const result = await res.json();
+      
+      if (result.success) {
+        toast.success("Obrigado pela sua avaliação!");
+        setHasRated(true); 
+      } else {
+        toast.error(result.error || "Erro ao enviar avaliação.");
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+    } finally {
+      setIsSubmittingReview(false);
     }
-    setIsSubmittingReview(false);
   };
 
   const resetToJoin = () => {
