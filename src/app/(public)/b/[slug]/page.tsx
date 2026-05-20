@@ -1,5 +1,7 @@
 export const dynamic = "force-dynamic";
 
+export const runtime = 'edge';
+
 import { createClient } from "@/utils/supabase/server";
 import { notFound } from "next/navigation";
 import { Store } from "lucide-react";
