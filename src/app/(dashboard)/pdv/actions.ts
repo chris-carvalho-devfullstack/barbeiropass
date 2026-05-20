@@ -5,6 +5,8 @@ import { createClient } from "@/utils/supabase/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+export const runtime = "edge";
+
 // ============================================================================
 // SCHEMAS DE VALIDAÇÃO
 // ============================================================================
