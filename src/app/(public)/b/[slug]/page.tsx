@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 export const runtime = 'edge';
+export const fetchCache = 'force-no-store'; // Garante que o Next.js NUNCA faça cache desta rota
 
 import { createClient } from "@/utils/supabase/server";
 import { notFound } from "next/navigation";
@@ -18,7 +19,7 @@ type InitialQueueData = {
   barber_name: string | null;
   chair_number: string | null;
   is_rated: boolean;
-  joined_at: string | null; // Adicionado para controle de data/hora
+  joined_at: string | null;
 };
 
 export default async function PublicBarbershopPage({ params, searchParams }: PageProps) {
@@ -62,14 +63,33 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       .maybeSingle();
     
     if (data) {
-      if (!(data.status === "finished" && data.is_rated === true)) {
+      let isActuallyRated = data.is_rated;
+      
+      // >>> A MÁGICA DA DUPLA CHECAGEM AQUI <<<
+      // Se a fila diz que não foi avaliado, mas já está finalizado, nós verificamos 
+      // diretamente a tabela de avaliações para driblar o cache e falhas do RLS
+      if (!isActuallyRated && data.status === "finished") {
+        const { count } = await supabase
+          .from("reviews")
+          .select("*", { count: "exact", head: true })
+          .eq("source_id", data.id);
+          
+        if (count && count > 0) {
+          isActuallyRated = true;
+          // Tenta atualizar a flag silenciosamente para corrigir o banco no futuro
+          await supabase.from("virtual_queue").update({ is_rated: true }).eq("id", data.id);
+        }
+      }
+
+      // Agora usamos a flag isActuallyRated que é 100% confiável
+      if (!(data.status === "finished" && isActuallyRated === true)) {
         initialQueueData = {
           id: data.id,
           status: data.status,
           barber_name: data.barber_name,
           chair_number: data.chair_number,
-          is_rated: data.is_rated || false,
-          joined_at: data.joined_at, // Mapeado aqui
+          is_rated: isActuallyRated, 
+          joined_at: data.joined_at,
         };
 
         if (data.status === "waiting") {

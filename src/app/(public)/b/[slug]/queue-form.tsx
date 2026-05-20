@@ -61,15 +61,11 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
   const estimatedWaitTime = waitingCount * 20;
 
-  // Função auxiliar para formatação cronológica exata baseada em Brasília
   const formatDateTime = (isoString: string | null) => {
     if (!isoString) return "";
     return new Date(isoString).toLocaleString("pt-BR", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
       timeZone: "America/Sao_Paulo"
     });
   };
@@ -130,7 +126,17 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     if (error) { toast.error("Erro ao conectar."); setLoading(false); }
   };
 
-  const handleLogout = async () => { setLoading(true); await supabase.auth.signOut(); window.location.reload(); };
+  const handleLogout = async () => { 
+    setLoading(true); 
+    await supabase.auth.signOut(); 
+    window.location.assign(window.location.pathname); 
+  };
+
+  // Técnica anti-cache agressiva (Timestamp na URL)
+  const handleRejoinQueue = () => {
+    const timestamp = new Date().getTime();
+    window.location.assign(`${window.location.pathname}?t=${timestamp}${isLocal ? '&origem=balcao' : ''}`);
+  };
 
   const handleJoinQueue = async () => {
     if (!turnstileToken) { 
@@ -297,7 +303,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
                </div>
                <div className="text-center px-4">
                  <h3 className="font-black text-slate-900 text-xl">Tudo pronto!</h3>
-                 {/* TEXTO ATUALIZADO: Totalmente personalizado com dados cronológicos do próprio usuário */}
                  <p className="text-sm text-slate-500 font-medium mt-3 max-w-xs mx-auto leading-relaxed">
                    Seu último atendimento foi com o profissional <span className="font-bold text-slate-800">{barberName || "Barbeiro"}</span> em <span className="font-bold text-slate-800">{formatDateTime(joinedAt)}</span>.
                    <br /><br />
@@ -307,7 +312,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
                
                {isLocal ? (
                  <div className="w-full space-y-4 pt-4 border-t border-slate-100">
-                    <Button onClick={() => window.location.reload()} className="w-full h-16 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-black text-lg shadow-lg transition-all active:scale-[0.98]">
+                    <Button onClick={handleRejoinQueue} className="w-full h-16 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-black text-lg shadow-lg transition-all active:scale-[0.98]">
                       Quero entrar na fila novamente
                     </Button>
                  </div>
