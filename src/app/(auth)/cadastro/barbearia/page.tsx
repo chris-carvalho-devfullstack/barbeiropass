@@ -1,13 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Scissors, Loader2 } from "lucide-react";
+import { Scissors, Loader2, LogOut } from "lucide-react";
 import { maskCpfCnpj, isValidCPF, isValidCNPJ } from "@/utils/validations";
 import { registerBarbershop } from "../actions";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { createClient } from "@/utils/supabase/client";
 
 const formSchema = z.object({
   name: z.string().min(3, "O nome precisa ter pelo menos 3 caracteres"),
@@ -26,6 +28,8 @@ export const dynamic = "force-dynamic";
 
 export default function CadastroBarbeariaPage() {
   const router = useRouter();
+  const supabase = createClient();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   
   const {
     register,
@@ -50,6 +54,17 @@ export default function CadastroBarbeariaPage() {
       
     } catch (error) {
       toast.error("Ocorreu um erro inesperado. Tente novamente.");
+    }
+  };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+      router.push("/login"); // Redireciona de volta para o login para escolher outra conta
+    } catch (error) {
+      toast.error("Erro ao sair da conta.");
+      setIsLoggingOut(false);
     }
   };
 
@@ -83,10 +98,26 @@ export default function CadastroBarbeariaPage() {
               {errors.document && <p className="mt-1 text-xs text-red-500">{errors.document.message}</p>}
             </div>
 
-            <button type="submit" disabled={isSubmitting} className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 disabled:opacity-70">
+            <button type="submit" disabled={isSubmitting || isLoggingOut} className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 disabled:opacity-70 transition-all">
               {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : "Finalizar Cadastro"}
             </button>
           </form>
+
+          <div className="mt-6 border-t border-zinc-100 pt-6">
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={isLoggingOut || isSubmitting}
+              className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-zinc-500 hover:text-zinc-800 transition-colors disabled:opacity-50"
+            >
+              {isLoggingOut ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                <LogOut size={16} />
+              )}
+              Trocar de Conta? Sair
+            </button>
+          </div>
         </div>
       </div>
     </div>

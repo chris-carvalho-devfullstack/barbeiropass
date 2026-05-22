@@ -122,8 +122,22 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
 
   const handleGoogleLogin = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/callback?next=${window.location.pathname}${isLocal ? '?origem=balcao' : ''}` } });
-    if (error) { toast.error("Erro ao conectar."); setLoading(false); }
+    
+    // Constrói a URL de retorno com o parâmetro 'next' dinâmico e seguro
+    const currentPath = window.location.pathname;
+    const nextUrl = isLocal ? `${currentPath}?origem=balcao` : currentPath;
+
+    const { error } = await supabase.auth.signInWithOAuth({ 
+      provider: "google", 
+      options: { 
+        redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(nextUrl)}` 
+      } 
+    });
+    
+    if (error) { 
+      toast.error("Erro ao conectar com Google."); 
+      setLoading(false); 
+    }
   };
 
   const handleLogout = async () => { 
