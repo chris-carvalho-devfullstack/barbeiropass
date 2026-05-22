@@ -7,8 +7,6 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  
-  // Captura o parâmetro 'next' (ex: /b/barbearia-do-ze)
   const next = requestUrl.searchParams.get("next");
 
   if (code) {
@@ -19,21 +17,23 @@ export async function GET(request: Request) {
     
     if (!error) {
       // ============================================================================
-      // 1. DESVIO PARA CLIENTES (FILA VIRTUAL)
+      // 1. ROTEAMENTO DE CLIENTES (WHITELIST)
       // ============================================================================
-      // Se existe um parâmetro 'next', significa que o login veio de uma página pública (ex: Fila).
-      // Redirecionamos o utilizador de volta para lá imediatamente.
-      if (next) {
+      // Só respeita o parâmetro 'next' se for expressamente uma rota pública de cliente (ex: Fila).
+      const isClientRoute = next && next.startsWith('/b/');
+
+      if (isClientRoute) {
         return NextResponse.redirect(new URL(next, requestUrl.origin));
       }
 
       // ============================================================================
-      // 2. LÓGICA ORIGINAL PARA DONOS DE BARBEARIA
+      // 2. ROTEAMENTO INTELIGENTE PARA DONOS (SINGLE SOURCE OF TRUTH)
       // ============================================================================
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (user && !userError) {
+        // A decisão do destino final é tomada pelo banco de dados, ignorando a URL
         const { data: existingMember, error: memberError } = await supabase
           .from("barbershop_members")
           .select("id")
@@ -46,9 +46,12 @@ export async function GET(request: Request) {
           return NextResponse.redirect(new URL("/login?error=auth_failed", requestUrl.origin));
         }
 
+        // Se já existe vínculo, é um Login normal -> Vai pro Dashboard
         if (existingMember) {
           return NextResponse.redirect(new URL("/dashboard", requestUrl.origin));
-        } else {
+        } 
+        // Se não existe vínculo, é um Cadastro novo -> Vai pro Onboarding da Barbearia
+        else {
           return NextResponse.redirect(new URL("/cadastro/barbearia", requestUrl.origin));
         }
       }

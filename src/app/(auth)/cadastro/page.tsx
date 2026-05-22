@@ -74,8 +74,8 @@ export default function CadastroPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          // Após logar no Google, envia para a etapa de cadastro da barbearia
-          redirectTo: `${window.location.origin}/callback?next=/cadastro/barbearia`,
+          // Deixa o callback padrão decidir o destino com base no banco de dados
+          redirectTo: `${window.location.origin}/callback`,
         },
       });
 
