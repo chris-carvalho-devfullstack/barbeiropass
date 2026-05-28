@@ -10,8 +10,9 @@ import {
   Settings,
   Package,
   Calendar,
-  ListOrdered, // <-- NOVO Ícone para a Fila
-  Calculator,  // <-- NOVO Ícone para o PDV
+  ListOrdered, 
+  Calculator,
+  IdCard,
 } from "lucide-react";
 
 import {
@@ -29,15 +30,15 @@ import {
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-// 1. Atualizamos a lista de itens do menu aqui
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "PDV", url: "/pdv", icon: Calculator },           // <-- ADICIONADO AQUI
-  { title: "Fila Virtual", url: "/fila", icon: ListOrdered }, // <-- ADICIONADO AQUI
+  { title: "PDV", url: "/pdv", icon: Calculator },
+  { title: "Fila Virtual", url: "/fila", icon: ListOrdered },
   { title: "Agenda", url: "/agendamentos", icon: Calendar },
   { title: "Serviços", url: "/servicos", icon: Scissors },
   { title: "Produtos", url: "#", icon: Package },
   { title: "Clientes (CRM)", url: "/clientes", icon: Users },
+  { title: "Equipe", url: "/equipe", icon: IdCard },
   { title: "Fluxo de Caixa", url: "#", icon: DollarSign },
   { title: "Configurações", url: "#", icon: Settings },
 ];
@@ -45,7 +46,8 @@ const items = [
 export function AppSidebar() {
   const [mounted, setMounted] = React.useState(false);
   
-  const { state } = useSidebar();
+  // 1. Extraímos isMobile e setOpenMobile do hook useSidebar
+  const { state, isMobile, setOpenMobile } = useSidebar();
 
   React.useEffect(() => {
     setMounted(true);
@@ -78,7 +80,15 @@ export function AppSidebar() {
                 {items.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild tooltip={item.title}>
-                      <Link href={item.url}>
+                      <Link 
+                        href={item.url}
+                        // 2. Adicionamos o evento onClick para fechar o menu apenas no mobile
+                        onClick={() => {
+                          if (isMobile) {
+                            setOpenMobile(false);
+                          }
+                        }}
+                      >
                         <item.icon className="size-4" />
                         <span>{item.title}</span>
                       </Link>
