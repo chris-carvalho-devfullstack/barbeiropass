@@ -6,7 +6,7 @@ import Image from "next/image";
 import { 
   Loader2, ShieldCheck, MoreHorizontal, 
   Pencil, Trash2, Search, ArrowDownAZ, ArrowUpZA, UserX, UserCheck, ChevronRight,
-  IdCard, UserPlus
+  IdCard, UserPlus, LayoutDashboard
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { toast } from "sonner";
@@ -225,7 +225,7 @@ export default function EquipePage() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-400">
             <Loader2 className="size-8 animate-spin text-blue-500" />
-            <p className="font-medium">Carregando plantel...</p>
+            <p className="font-medium">Carregando equipe...</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -304,8 +304,18 @@ export default function EquipePage() {
                               <MoreHorizontal className="size-4 text-slate-400 hover:text-slate-900" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48 shadow-xl rounded-xl">
+                          <DropdownMenuContent align="end" className="w-56 shadow-xl rounded-xl">
                             <DropdownMenuLabel className="text-xs text-slate-400">Ações do Perfil</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            
+                            {/* NOVA AÇÃO: VER PAINEL DO STAFF */}
+                            <DropdownMenuItem 
+                              onClick={() => router.push(`/equipe/staff?id=${member.id}`)}
+                              className="cursor-pointer font-medium text-blue-600 dark:text-blue-400 focus:text-blue-700 dark:focus:text-blue-300 focus:bg-blue-50 dark:focus:bg-blue-900/30"
+                            >
+                              <LayoutDashboard className="mr-2 size-4" /> Ver Painel do Staff
+                            </DropdownMenuItem>
+
                             <DropdownMenuSeparator />
                             
                             <DropdownMenuItem 
@@ -348,7 +358,7 @@ export default function EquipePage() {
 
       {/* MODAL PREMIUM DE DETALHES RÁPIDOS */}
       <Dialog open={!!selectedStaff} onOpenChange={(open) => !open && setSelectedStaff(null)}>
-        <DialogContent className="sm:max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl [&>button]:text-slate-300 hover:[&>button]:text-slate-900 hover:[&>button]:bg-slate-100 [&>button]:opacity-80 hover:[&>button]:opacity-100 [&>button]:p-1 [&>button]:rounded-full [&>button]:transition-colors">
+        <DialogContent className="sm:max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl [&>button]:text-slate-300 [&>button:hover]:text-slate-900 [&>button:hover]:bg-slate-100 [&>button]:opacity-80 [&>button:hover]:opacity-100 [&>button]:p-1 [&>button]:rounded-full [&>button]:duration-15">
           {selectedStaff && (
             <>
               {/* CABEÇALHO REFINADO */}
@@ -412,17 +422,32 @@ export default function EquipePage() {
                   </div>
                 </div>
 
-                <Button 
-                  className="w-full font-bold h-12 text-md shadow-sm bg-slate-900 hover:bg-slate-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-slate-200 transition-all group"
-                  onClick={() => {
-                    setSelectedStaff(null);
-                    setStaffToEditId(selectedStaff.id);
-                    setIsStaffFormOpen(true);
-                  }}
-                >
-                  Acessar Ficha Completa
-                  <ChevronRight className="size-5 ml-2 text-slate-400 group-hover:translate-x-1 group-hover:text-white dark:group-hover:text-zinc-900 transition-all" />
-                </Button>
+                {/* BOTÕES DE AÇÃO REFINADOS */}
+                <div className="flex flex-col gap-2 pt-2">
+                  <Button 
+                    className="w-full font-bold h-12 text-md shadow-sm bg-slate-900 hover:bg-slate-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-slate-200 transition-all group cursor-pointer"
+                    onClick={() => {
+                      router.push(`/equipe/staff?id=${selectedStaff.id}`);
+                      setSelectedStaff(null);
+                    }}
+                  >
+                    <LayoutDashboard className="mr-2 size-4" />
+                    Acessar Painel do Profissional
+                    <ChevronRight className="size-5 ml-2 text-slate-400 group-hover:translate-x-1 group-hover:text-white dark:group-hover:text-zinc-900 transition-all" />
+                  </Button>
+
+                  <Button 
+                    variant="outline"
+                    className="w-full h-10 font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    onClick={() => {
+                      setStaffToEditId(selectedStaff.id);
+                      setIsStaffFormOpen(true);
+                      setSelectedStaff(null);
+                    }}
+                  >
+                    <Pencil className="mr-2 size-4" /> Editar Ficha Cadastral
+                  </Button>
+                </div>
               </div>
             </>
           )}
