@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { 
-  Users, Loader2, ShieldCheck, MoreHorizontal, 
+  Loader2, ShieldCheck, MoreHorizontal, 
   Pencil, Trash2, Search, ArrowDownAZ, ArrowUpZA, UserX, UserCheck, ChevronRight,
-  IdCard // <-- 1. Importamos o IdCard aqui
+  IdCard, UserPlus
 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { toast } from "sonner";
 
-import { CreateStaffDialog } from "@/components/create-staff-dialog";
+import { StaffFormDialog } from "@/components/staff-form-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +37,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,7 +67,9 @@ const roleMap: Record<StaffMember['role'], { label: string; color: string }> = {
 
 export default function EquipePage() {
   const router = useRouter();
-  const supabase = createClient();
+  
+  // Utilizando useMemo para garantir que o supabase client não seja recriado a cada renderização
+  const supabase = useMemo(() => createClient(), []);
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,7 +81,12 @@ export default function EquipePage() {
   const [staffToDelete, setStaffToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  async function fetchStaff() {
+  // Estados de controle do novo Dialog Unificado (Criar/Editar)
+  const [isStaffFormOpen, setIsStaffFormOpen] = useState(false);
+  const [staffToEditId, setStaffToEditId] = useState<string | null>(null);
+
+  // Envolvendo no useCallback para evitar warnings do useEffect
+  const fetchStaff = useCallback(async () => {
     try {
       setLoading(true);
       const { data, error } = await supabase
@@ -94,11 +101,11 @@ export default function EquipePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [supabase]);
 
   useEffect(() => {
     fetchStaff();
-  }, []);
+  }, [fetchStaff]);
 
   const filteredAndSortedStaff = useMemo(() => {
     return staff
@@ -129,6 +136,7 @@ export default function EquipePage() {
       toast.success(`Profissional ${member.is_active ? "desativado" : "ativado"} com sucesso!`, { id: toastId });
       fetchStaff();
     } catch (error) {
+      console.error("[TOGGLE_STATUS_ERROR]", error);
       toast.error("Erro ao atualizar status.", { id: toastId });
     }
   }
@@ -140,12 +148,21 @@ export default function EquipePage() {
     const toastId = toast.loading("Excluindo profissional...");
     
     try {
-      const { error } = await supabase.from("staff").delete().eq("id", staffToDelete);
-      if (error) throw error;
+      const response = await fetch(`/api/staff?id=${staffToDelete}`, {
+        method: "DELETE",
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Erro ao excluir o registro.");
+      }
+
       toast.success("Profissional excluído com sucesso!", { id: toastId });
       fetchStaff();
-    } catch (error) {
-      toast.error("Erro ao excluir. Verifique se ele não possui agendamentos atrelados.", { id: toastId });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Erro ao excluir profissional.";
+      toast.error(errorMessage, { id: toastId });
     } finally {
       setIsDeleting(false);
       setStaffToDelete(null);
@@ -163,7 +180,6 @@ export default function EquipePage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 shadow-sm">
-            {/* 2. Substituímos o Briefcase pelo IdCard aqui no cabeçalho */}
             <IdCard className="size-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
@@ -174,7 +190,13 @@ export default function EquipePage() {
           </div>
         </div>
         
-        <CreateStaffDialog onStaffCreated={fetchStaff} />
+        <Button onClick={() => {
+          setStaffToEditId(null);
+          setIsStaffFormOpen(true);
+        }} className="font-bold shadow-sm">
+          <UserPlus className="size-4 mr-2" />
+          Novo Membro
+        </Button>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white dark:bg-zinc-950 p-4 rounded-xl border border-slate-200 dark:border-zinc-800 shadow-sm">
@@ -214,14 +236,14 @@ export default function EquipePage() {
                   <TableHead className="font-bold text-slate-700 dark:text-zinc-300">Cargo</TableHead>
                   <TableHead className="font-bold text-slate-700 dark:text-zinc-300">Código</TableHead>
                   <TableHead className="font-bold text-slate-700 dark:text-zinc-300">Contrato</TableHead>
-                  <TableHead className="w-[80px] text-right"></TableHead>
+                  <TableHead className="w-20 text-right"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredAndSortedStaff.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center py-16 text-slate-500 font-medium">
-                      Nenhum profissional encontrado na busca.
+                      Nenhum profissional cadastrado.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -232,9 +254,15 @@ export default function EquipePage() {
                         className="font-bold text-slate-900 dark:text-white flex items-center gap-3 cursor-pointer group-hover:text-blue-600 transition-colors"
                         onClick={() => setSelectedStaff(member)}
                       >
-                        <div className="size-9 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-xs border border-slate-200 overflow-hidden shrink-0">
+                        <div className="relative size-9 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-xs border border-slate-200 overflow-hidden shrink-0">
                           {member.avatar_url ? (
-                            <img src={member.avatar_url} alt={member.full_name} className="w-full h-full object-cover" />
+                            <Image 
+                              src={member.avatar_url} 
+                              alt={member.full_name} 
+                              fill 
+                              sizes="36px"
+                              className="object-cover" 
+                            />
                           ) : (
                             getInitials(member.full_name)
                           )}
@@ -280,7 +308,13 @@ export default function EquipePage() {
                             <DropdownMenuLabel className="text-xs text-slate-400">Ações do Perfil</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             
-                            <DropdownMenuItem onClick={() => router.push(`/equipe/${member.id}`)} className="cursor-pointer">
+                            <DropdownMenuItem 
+                              onClick={() => {
+                                setStaffToEditId(member.id);
+                                setIsStaffFormOpen(true);
+                              }} 
+                              className="cursor-pointer"
+                            >
                               <Pencil className="mr-2 size-4 text-slate-500" /> Editar Ficha
                             </DropdownMenuItem>
                             
@@ -317,12 +351,18 @@ export default function EquipePage() {
         <DialogContent className="sm:max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl [&>button]:text-slate-300 hover:[&>button]:text-slate-900 hover:[&>button]:bg-slate-100 [&>button]:opacity-80 hover:[&>button]:opacity-100 [&>button]:p-1 [&>button]:rounded-full [&>button]:transition-colors">
           {selectedStaff && (
             <>
-              {/* CABEÇALHO REFINADO: Slate Escuro Sóbrio e Corporativo */}
+              {/* CABEÇALHO REFINADO */}
               <div className="bg-slate-800 dark:bg-zinc-900 p-6 flex items-center gap-5 text-white relative border-b border-slate-700/50 dark:border-zinc-800">
                 
-                <div className="size-16 rounded-full bg-slate-700/50 dark:bg-zinc-800 border-2 border-slate-600/50 dark:border-zinc-700 flex items-center justify-center text-2xl font-black shadow-sm overflow-hidden shrink-0">
+                <div className="relative size-16 rounded-full bg-slate-700/50 dark:bg-zinc-800 border-2 border-slate-600/50 dark:border-zinc-700 flex items-center justify-center text-2xl font-black shadow-sm overflow-hidden shrink-0">
                   {selectedStaff.avatar_url ? (
-                    <img src={selectedStaff.avatar_url} alt={selectedStaff.full_name} className="w-full h-full object-cover" />
+                    <Image 
+                      src={selectedStaff.avatar_url} 
+                      alt={selectedStaff.full_name} 
+                      fill 
+                      sizes="64px"
+                      className="object-cover" 
+                    />
                   ) : (
                     getInitials(selectedStaff.full_name)
                   )}
@@ -341,7 +381,7 @@ export default function EquipePage() {
                 </div>
               </div>
 
-              {/* CORPO DO MODAL COM CARDS REFINADOS */}
+              {/* CORPO DO MODAL */}
               <div className="p-6 space-y-6 bg-white dark:bg-zinc-950">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-slate-50/50 dark:bg-zinc-900/50 p-4 rounded-xl border border-slate-200/60 dark:border-zinc-800/60 transition-colors hover:bg-slate-50 dark:hover:bg-zinc-900">
@@ -374,7 +414,11 @@ export default function EquipePage() {
 
                 <Button 
                   className="w-full font-bold h-12 text-md shadow-sm bg-slate-900 hover:bg-slate-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-slate-200 transition-all group"
-                  onClick={() => router.push(`/equipe/${selectedStaff.id}`)}
+                  onClick={() => {
+                    setSelectedStaff(null);
+                    setStaffToEditId(selectedStaff.id);
+                    setIsStaffFormOpen(true);
+                  }}
                 >
                   Acessar Ficha Completa
                   <ChevronRight className="size-5 ml-2 text-slate-400 group-hover:translate-x-1 group-hover:text-white dark:group-hover:text-zinc-900 transition-all" />
@@ -416,6 +460,14 @@ export default function EquipePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* DIALOG UNIFICADO PARA CRIAR/EDITAR PROFISSIONAL */}
+      <StaffFormDialog 
+        isOpen={isStaffFormOpen}
+        onOpenChange={setIsStaffFormOpen}
+        staffIdToEdit={staffToEditId}
+        onSuccess={fetchStaff} 
+      />
 
     </div>
   );
