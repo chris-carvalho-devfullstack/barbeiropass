@@ -4,11 +4,12 @@
 import { createClient } from "@/utils/supabase/server";
 import { revalidatePath } from "next/cache";
 
-// 1. Entrar na Fila (Ação Legada/Interna)
+// 1. Entrar na Fila (Ação Legada/Interna - Totem Público)
 export async function joinQueueAction(data: { 
   barbershop_id: string; 
   client_name: string; 
-  client_id?: string | null; 
+  client_id?: string | null;
+  barber_id?: string | null; // Novo: Recebe a preferência do cliente
 }) {
   const supabase = await createClient();
 
@@ -18,6 +19,7 @@ export async function joinQueueAction(data: {
       barbershop_id: data.barbershop_id,
       client_name: data.client_name,
       client_id: data.client_id || null,
+      barber_id: data.barber_id || null, // Grava a escolha ou null se for "Qualquer um"
       status: 'waiting'
     });
 
@@ -28,34 +30,56 @@ export async function joinQueueAction(data: {
 
   revalidatePath("/fila");
   revalidatePath("/pdv");
+  revalidatePath("/b/[slug]", "page");
   
   return { success: true };
 }
 
 // 2. Atualizar Status (Para uso interno da Barbearia)
-export async function updateQueueStatusAction(id: string, status: string) {
+export async function updateQueueStatusAction(id: string, status: string, barberId?: string) {
   const supabase = await createClient();
   
-  // Tipagem estrita para evitar o uso de 'any'
+  // Tipagem estrita para o payload
   type QueueUpdatePayload = {
     status: string;
-    barber_name?: string;
-    chair_number?: string;
+    barber_id?: string;    // Novo: vincula o id real do barbeiro no banco
+    barber_name?: string;  // Manter para compatibilidade visual
   };
 
-  // Objeto base de atualização
   const updateData: QueueUpdatePayload = { status };
 
-  // Se o barbeiro estiver a chamar o cliente para a cadeira agora
-  if (status === "in_progress") {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      // Captura o nome humanizado do barbeiro logado no painel interno
-      const barberName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Barbeiro";
-      
-      updateData.barber_name = barberName;
-      // Caso queira expandir para cadeiras fixas por membro futuramente, o campo já fica mapeado
-      updateData.chair_number = "01"; 
+  // Se o profissional está a iniciar o atendimento
+  if (status === "serving") {
+    // Se o barberId não foi passado, tenta buscar o ID do staff logado
+    let finalBarberId = barberId;
+    
+    if (!finalBarberId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: staff } = await supabase
+          .from("staff")
+          .select("id, full_name")
+          .eq("profile_id", user.id)
+          .maybeSingle();
+          
+        if (staff) {
+          finalBarberId = staff.id;
+          updateData.barber_name = staff.full_name;
+        }
+      }
+    } else {
+      // Se recebemos um barberId explícito, buscamos apenas o nome para manter a consistência
+      const { data: staff } = await supabase
+        .from("staff")
+        .select("full_name")
+        .eq("id", barberId)
+        .single();
+        
+      if (staff) updateData.barber_name = staff.full_name;
+    }
+
+    if (finalBarberId) {
+      updateData.barber_id = finalBarberId;
     }
   }
 
@@ -64,12 +88,13 @@ export async function updateQueueStatusAction(id: string, status: string) {
     .update(updateData)
     .eq("id", id);
 
-  if (error) return { error: "Erro ao atualizar status." };
+  if (error) {
+    console.error("Erro ao atualizar fila:", error);
+    return { error: "Erro ao atualizar status." };
+  }
 
-  // Força a limpeza de cache do Next.js nas rotas críticas
   revalidatePath("/fila");
   revalidatePath("/pdv");
-  revalidatePath("/b/[slug]", "page"); 
   
   return { success: true };
 }
@@ -79,7 +104,7 @@ export async function updateQueueStatusAction(id: string, status: string) {
 // =========================================================================
 
 // 3. Inserir cliente manualmente na fila (O "Sem Telemóvel")
-export async function addManualClientAction(barbershopId: string, clientName: string) {
+export async function addManualClientAction(barbershopId: string, clientName: string, barberId?: string | null) {
   try {
     const supabase = await createClient();
     
@@ -92,6 +117,7 @@ export async function addManualClientAction(barbershopId: string, clientName: st
       .insert({
         barbershop_id: barbershopId,
         client_name: clientName,
+        barber_id: barberId || null, // Permite à recepcionista definir a preferência
         is_authenticated: false, // Marca como inserção manual para auditoria
         status: "waiting",
       });

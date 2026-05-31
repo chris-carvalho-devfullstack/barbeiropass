@@ -38,6 +38,14 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
 
   if (error || !barbershop) notFound();
 
+  // >>> BUSCA DA LISTA DE BARBEIROS ATIVOS PARA A FILA <<<
+  const { data: barbers } = await supabase
+    .from("staff")
+    .select("id, full_name, avatar_url")
+    .eq("barbershop_id", barbershop.id)
+    .eq("role", "barber")
+    .eq("is_active", true);
+
   const { data: { user } } = await supabase.auth.getUser();
 
   const { count: queueCount } = await supabase
@@ -142,6 +150,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
             <QueueForm 
               barbershopId={barbershop.id} 
               barbershopName={barbershop.name}
+              barbers={barbers || []} // NOVA PROP
               user={user} 
               isLocal={isLocal}
               initialWaitingCount={initialWaitingCount}

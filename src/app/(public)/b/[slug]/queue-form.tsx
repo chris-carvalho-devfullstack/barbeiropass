@@ -1,17 +1,26 @@
+// src/app/(public)/b/[slug]/queue-form.tsx
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react"; // <-- useRef adicionado aqui
 import { createClient } from "@/utils/supabase/client";
 import { Turnstile } from "@marsidev/react-turnstile";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, Users, Clock, Scissors, Star, MessageSquare, BellRing } from "lucide-react"; 
 import { type User } from "@supabase/supabase-js"; 
 import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+interface Barber {
+  id: string;
+  full_name: string;
+}
 
 interface QueueFormProps {
   barbershopId: string;
   barbershopName: string;
+  barbers: Barber[];
   user: User | null; 
   isLocal: boolean;
   initialWaitingCount: number;
@@ -30,7 +39,7 @@ interface QueueRowPayload {
   joined_at: string | null;
 }
 
-export default function QueueForm({ barbershopId, barbershopName, user, isLocal, initialWaitingCount, initialQueueData, initialUserPosition }: QueueFormProps) {
+export default function QueueForm({ barbershopId, barbershopName, barbers, user, isLocal, initialWaitingCount, initialQueueData, initialUserPosition }: QueueFormProps) {
   const [waitingCount, setWaitingCount] = useState(initialWaitingCount);
   const [userPosition, setUserPosition] = useState<number | null>(initialUserPosition);
   
@@ -42,6 +51,8 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const [hasRated, setHasRated] = useState<boolean>(!!initialQueueData?.is_rated);
   const [joinedAt, setJoinedAt] = useState<string | null>(initialQueueData?.joined_at || null);
 
+  const [selectedBarberId, setSelectedBarberId] = useState<string>("next");
+
   const [barberRating, setBarberRating] = useState(0);
   const [hoverBarberRating, setHoverBarberRating] = useState(0);
   const [barbershopRating, setBarbershopRating] = useState(0);
@@ -50,7 +61,10 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
+  // REFERÊNCIA PARA RESETAR O WIDGET DE SEGURANÇA
+  const turnstileRef = useRef<any>(null); 
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  
   const [loading, setLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false); 
   const [showManualPin, setShowManualPin] = useState(false); 
@@ -122,8 +136,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
 
   const handleGoogleLogin = async () => {
     setLoading(true);
-    
-    // Constrói a URL de retorno com o parâmetro 'next' dinâmico e seguro
     const currentPath = window.location.pathname;
     const nextUrl = isLocal ? `${currentPath}?origem=balcao` : currentPath;
 
@@ -146,7 +158,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     window.location.assign(window.location.pathname); 
   };
 
-  // Técnica anti-cache agressiva (Timestamp na URL)
   const handleRejoinQueue = () => {
     const timestamp = new Date().getTime();
     window.location.assign(`${window.location.pathname}?t=${timestamp}${isLocal ? '&origem=balcao' : ''}`);
@@ -159,18 +170,32 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
     }
     setLoading(true);
     try {
+      const finalBarberId = selectedBarberId === "next" ? null : selectedBarberId;
       const res = await fetch('/api/join-queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barbershopId, turnstileToken })
+        body: JSON.stringify({ 
+          barbershopId: barbershopId, 
+          clientName: userName,
+          barberId: finalBarberId,
+          turnstileToken 
+        })
       });
       const result = await res.json();
+      
       if (result.error) {
         toast.error(result.error);
+        // >>> MÁGICA DO RESET: Apaga o token velho e pede um novo ao widget
+        turnstileRef.current?.reset();
+        setTurnstileToken(null);
       }
       setLoading(false);
     } catch (error) {
+      console.error(error);
       toast.error("Erro de conexão. Tente novamente.");
+      // >>> MÁGICA DO RESET
+      turnstileRef.current?.reset();
+      setTurnstileToken(null);
       setLoading(false);
     }
   };
@@ -200,6 +225,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
         setVerifyingPin(false);
       }
     } catch (error) {
+      console.error(error);
       toast.error("Erro de conexão. Tente novamente.");
       setVerifyingPin(false);
     }
@@ -229,6 +255,7 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
         toast.error(result.error || "Erro ao enviar avaliação.");
       }
     } catch (error) {
+      console.error(error);
       toast.error("Erro de conexão. Tente novamente.");
     } finally {
       setIsSubmittingReview(false);
@@ -255,12 +282,11 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
       )}
 
       {user && !isScanning && !showManualPin && currentStatus !== "finished" && (
-         <p className="text-sm font-medium text-slate-600">
+         <p className="text-sm font-medium text-slate-600 text-center">
            Olá, <span className="font-bold text-slate-900">{userName}</span>!
          </p>
       )}
 
-      {/* TELA DE AVALIAÇÃO E RETORNO */}
       {currentStatus === "finished" && (
         <div className="w-full animate-in zoom-in duration-300">
           {!hasRated ? (
@@ -341,10 +367,9 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
         </div>
       )}
 
-      {/* INTERFACE EM FILA / ATENDIMENTO */}
       {inQueue && currentStatus !== "finished" && (
         <div className="w-full">
-          {currentStatus === "in_progress" ? (
+          {currentStatus === "in_progress" || currentStatus === "serving" ? (
             <div className="space-y-4 animate-in zoom-in duration-500 flex flex-col items-center py-4 bg-emerald-50/60 rounded-[2rem] border border-emerald-100 p-4">
               <div className="h-16 w-16 bg-emerald-600 text-white rounded-full flex items-center justify-center mb-2 shadow-md shadow-emerald-100 animate-pulse">
                 <Scissors size={28} />
@@ -387,7 +412,6 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
         </div>
       )}
 
-      {/* ENTRADA DE FILA BASE */}
       {!inQueue && currentStatus !== "finished" && (
         <>
           {!user && (
@@ -439,9 +463,35 @@ export default function QueueForm({ barbershopId, barbershopName, user, isLocal,
 
           {user && isLocal && (
             <div className="w-full space-y-6 animate-in fade-in">
-              <div className="flex justify-center w-full min-h-16.25">
-                <Turnstile siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
+              
+              <div className="w-full bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4 mt-2">
+                <Label className="flex items-center justify-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest">
+                  <Scissors className="size-4 text-blue-500" />
+                  Quem vai te atender?
+                </Label>
+                
+                <Select value={selectedBarberId} onValueChange={setSelectedBarberId}>
+                  <SelectTrigger className="w-full h-14 bg-slate-50 border-2 border-slate-100 hover:border-slate-200 rounded-2xl text-base font-bold text-slate-700 transition-all focus:ring-4 focus:ring-blue-50 focus:border-blue-500 shadow-none">
+                    <SelectValue placeholder="Selecione o profissional" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border-slate-100 shadow-xl overflow-hidden p-1">
+                    <SelectItem value="next" className="font-black text-blue-600 focus:bg-blue-50 py-3 cursor-pointer rounded-xl mb-1">
+                      ⚡ Qualquer um (Mais Rápido)
+                    </SelectItem>
+                    {barbers.map((b) => (
+                      <SelectItem key={b.id} value={b.id} className="font-bold text-slate-700 py-3 cursor-pointer rounded-xl">
+                        {b.full_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+
+              <div className="flex justify-center w-full min-h-16.25">
+                {/* ADIÇÃO DO ref={turnstileRef} */}
+                <Turnstile ref={turnstileRef} siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
+              </div>
+              
               <div className="space-y-4">
                 <Button onClick={handleJoinQueue} disabled={loading || !turnstileToken} className="w-full h-16 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98]">
                   {loading ? <Loader2 className="animate-spin size-6" /> : <div className="flex items-center gap-2"><Sparkles className="size-5" /><span>Confirmar Entrada na Fila</span></div>}

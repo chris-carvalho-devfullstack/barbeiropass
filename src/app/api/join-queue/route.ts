@@ -1,49 +1,57 @@
 // src/app/api/join-queue/route.ts
-export const runtime = 'edge'; // OBRIGATÓRIO NA CLOUDFLARE
-
+export const runtime = 'edge'; 
 
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-// Zod Schema: Blindagem de entrada
+// 1. ZOD SCHEMA RIGOROSO: Nenhuma requisição passa sem estes dados perfeitos
 const joinQueueSchema = z.object({
   barbershopId: z.string().uuid("ID da barbearia inválido."),
-  turnstileToken: z.string().min(1, "Token de segurança ausente."),
+  turnstileToken: z.string().min(10, "Token de segurança inválido."),
+  barberId: z.string().uuid("ID do profissional inválido.").nullable().optional(),
+  clientName: z.string().optional(),
 });
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     
-    // 1. Valida o formato dos dados
     const parsed = joinQueueSchema.safeParse(body);
     if (!parsed.success) {
+      console.error("Tentativa de manipulação de payload (Zod):", parsed.error.flatten());
       return NextResponse.json({ error: "Dados inválidos ou manipulados." }, { status: 400 });
     }
 
-    const { barbershopId, turnstileToken } = parsed.data;
+    const { barbershopId, turnstileToken, barberId, clientName: providedClientName } = parsed.data;
 
-    // 2. Validação Secreta do Cloudflare Turnstile
-    const turnstileEndpoint = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+    // 2. VALIDAÇÃO TURNSTILE CORRIGIDA (Raiz do problema 403)
     const secretKey = process.env.TURNSTILE_SECRET_KEY;
-
     if (!secretKey) {
-      return NextResponse.json({ error: "Erro de configuração no servidor." }, { status: 500 });
+      console.error("FALHA CRÍTICA: TURNSTILE_SECRET_KEY não encontrada no .env");
+      return NextResponse.json({ error: "Erro interno do servidor." }, { status: 500 });
     }
 
-    const turnstileRes = await fetch(turnstileEndpoint, {
+    // Usando URLSearchParams para garantir que os caracteres especiais do Token não quebram o POST
+    const formData = new URLSearchParams();
+    formData.append("secret", secretKey);
+    formData.append("response", turnstileToken);
+
+    const turnstileRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `secret=${secretKey}&response=${turnstileToken}`,
+      body: formData.toString(), // <-- Isto resolve o problema de formatação!
     });
     
     const turnstileData = await turnstileRes.json();
+    
+    // Se a Cloudflare recusar, nós travamos com o 403 (Forbidden) e informamos o motivo no console
     if (!turnstileData.success) {
-      return NextResponse.json({ error: "Falha na verificação de segurança. O sistema suspeita de tráfego automatizado." }, { status: 403 });
+      console.error("Cloudflare bloqueou o acesso. Códigos de erro:", turnstileData["error-codes"]);
+      return NextResponse.json({ error: "Falha na verificação de segurança (Anti-Bot)." }, { status: 403 });
     }
 
-    // 3. Validação de Identidade (Zero Trust com Supabase)
+    // 3. SEGURANÇA ZERO TRUST COM O SUPABASE
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
@@ -51,10 +59,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Sessão inválida. Por favor, inicie sessão novamente." }, { status: 401 });
     }
 
-    // -- AQUI VOCÊ PODE APLICAR SUA LÓGICA DE RATE LIMIT NO FUTURO --
-    // Exemplo: checkRateLimit(user.id) ... se falhar: return erro 429 (Too Many Requests)
-
-    // 4. Verificação da Banlist
+    // 4. VERIFICAÇÃO DE USUÁRIO BANIDO
     const { data: isBanned } = await supabase
       .from("banned_users")
       .select("id")
@@ -63,25 +68,25 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (isBanned) {
-      return NextResponse.json({ error: "Acesso bloqueado." }, { status: 403 });
+      return NextResponse.json({ error: "Acesso bloqueado por violação das políticas do salão." }, { status: 403 });
     }
 
-    // 5. Prevenção de Duplicata
+    // 5. PREVENÇÃO DE DUPLICATAS NA FILA
     const { data: alreadyInQueue } = await supabase
       .from("virtual_queue")
       .select("id")
       .eq("barbershop_id", barbershopId)
       .eq("client_auth_id", user.id)
-      .eq("status", "waiting")
+      .in("status", ["waiting", "serving"])
       .maybeSingle();
 
     if (alreadyInQueue) {
-      return NextResponse.json({ error: "Você já está a aguardar nesta fila!" }, { status: 409 });
+      return NextResponse.json({ error: "Você já está na lista de espera!" }, { status: 409 });
     }
 
-    const clientName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Cliente";
+    const clientName = providedClientName || user.user_metadata?.full_name || user.email?.split("@")[0] || "Cliente";
 
-    // 6. Inserção Segura na Base de Dados
+    // 6. INSERÇÃO SEGURA
     const { error: insertError } = await supabase
       .from("virtual_queue")
       .insert({
@@ -89,21 +94,21 @@ export async function POST(req: Request) {
         client_auth_id: user.id,
         client_auth_email: user.email,
         client_name: clientName,
+        barber_id: barberId || null,
         is_authenticated: true,
         turnstile_token_used: turnstileToken,
         status: "waiting",
       });
 
     if (insertError) {
-      return NextResponse.json({ error: "Ocorreu um erro ao registar a sua posição. Tente novamente." }, { status: 500 });
+      console.error("Falha ao inserir na tabela virtual_queue:", insertError);
+      return NextResponse.json({ error: "Erro ao registar a sua posição no banco de dados." }, { status: 500 });
     }
-
-    
 
     return NextResponse.json({ success: true });
 
   } catch (err) {
-    console.error("[JOIN QUEUE API ERROR]", err);
-    return NextResponse.json({ error: "Erro interno no servidor de fila." }, { status: 500 });
+    console.error("[JOIN QUEUE API CATCH ERROR]", err);
+    return NextResponse.json({ error: "Erro fatal no servidor de fila." }, { status: 500 });
   }
 }

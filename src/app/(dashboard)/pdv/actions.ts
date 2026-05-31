@@ -12,12 +12,14 @@ export interface CheckoutItem {
   id: string;
   type: ItemType;
   quantity: number;
+  barberId?: string | null; // Adicionado para rastrear a comissão do profissional
 }
 
 export interface CheckoutPayload {
   cashRegisterId: string;
   paymentMethod: PaymentMethod;
   clientId?: string | null;
+  appointmentId?: string | null; // Adicionado para dar baixa na agenda automaticamente
   items: CheckoutItem[];
 }
 
