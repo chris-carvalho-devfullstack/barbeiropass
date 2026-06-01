@@ -27,14 +27,25 @@ export async function POST(req: Request) {
   try {
     const payload = await req.json();
     const parsed = checkoutSchema.safeParse(payload);
-    if (!parsed.success) return NextResponse.json({ error: "Payload inválido detectado." }, { status: 400 });
+    
+    if (!parsed.success) {
+      console.error("🚨 [PDV ERRO] Payload inválido:", parsed.error.format());
+      return NextResponse.json({ error: "Payload inválido detectado." }, { status: 400 });
+    }
 
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      console.error("🚨 [PDV ERRO] Autenticação falhou:", authError);
+      return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
+    }
 
-    const { data: member } = await supabase.from("barbershop_members").select("barbershop_id").eq("profile_id", user.id).single();
-    if (!member) return NextResponse.json({ error: "Vínculo com barbearia não encontrado." }, { status: 403 });
+    const { data: member, error: memberError } = await supabase.from("barbershop_members").select("barbershop_id").eq("profile_id", user.id).single();
+    if (memberError || !member) {
+      console.error("🚨 [PDV ERRO] Vínculo com barbearia não encontrado:", memberError);
+      return NextResponse.json({ error: "Vínculo com barbearia não encontrado." }, { status: 403 });
+    }
 
     let realTotalAmount = 0;
     const orderItemsToInsert = [];
@@ -45,8 +56,8 @@ export async function POST(req: Request) {
       let commissionAmount = 0;
 
       if (item.type === "product") {
-        const { data: product } = await supabase.from("products").select("price, stock_quantity").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
-        if (!product) return NextResponse.json({ error: `Produto inválido: ${item.id}` }, { status: 400 });
+        const { data: product, error: pError } = await supabase.from("products").select("price, stock_quantity").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        if (pError || !product) return NextResponse.json({ error: `Produto inválido: ${item.id}` }, { status: 400 });
         if (product.stock_quantity < item.quantity) return NextResponse.json({ error: "Estoque insuficiente." }, { status: 400 });
         
         unitPrice = product.price;
@@ -58,8 +69,8 @@ export async function POST(req: Request) {
         });
 
       } else if (item.type === "service") {
-        const { data: service } = await supabase.from("services").select("price, name").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
-        if (!service) return NextResponse.json({ error: `Serviço inválido: ${item.id}` }, { status: 400 });
+        const { data: service, error: sError } = await supabase.from("services").select("price, name").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        if (sError || !service) return NextResponse.json({ error: `Serviço inválido: ${item.id}` }, { status: 400 });
         
         unitPrice = service.price;
 
@@ -99,31 +110,41 @@ export async function POST(req: Request) {
     // 1. Criar a Ordem de Venda (POS Order)
     const { data: order, error: orderError } = await supabase.from("pos_orders").insert({
       barbershop_id: member.barbershop_id, 
-      cash_register_id: parsed.data.cashRegisterId, 
+      // TRUQUE PARA NÃO QUEBRAR: Se vier o ID fake de caixa livre, transforma em nulo
+      cash_register_id: parsed.data.cashRegisterId === "00000000-0000-0000-0000-000000000000" ? null : parsed.data.cashRegisterId, 
       customer_id: parsed.data.clientId || null,
       total_amount: realTotalAmount, 
       payment_method: parsed.data.paymentMethod
     }).select("id").single();
 
-    if (orderError) return NextResponse.json({ error: "Erro ao registar a venda." }, { status: 500 });
+    if (orderError) {
+      console.error("🚨 [PDV ERRO GRAVE] Falha ao criar pos_orders:", orderError);
+      return NextResponse.json({ error: "Erro ao registar a venda." }, { status: 500 });
+    }
 
     // 2. Inserir os Itens da Venda
     const itemsComOrderId = orderItemsToInsert.map(i => ({ ...i, order_id: order.id }));
     const { error: itemsError } = await supabase.from("pos_order_items").insert(itemsComOrderId);
-    if (itemsError) return NextResponse.json({ error: "Erro ao salvar os itens da venda." }, { status: 500 });
+    
+    if (itemsError) {
+      console.error("🚨 [PDV ERRO GRAVE] Falha ao criar pos_order_items:", itemsError);
+      return NextResponse.json({ error: "Erro ao salvar os itens da venda." }, { status: 500 });
+    }
 
     // 3. DISTRIBUIR O DINHEIRO (Inserir no Ledger do Barbeiro)
     if (ledgersToInsert.length > 0) {
       const { error: ledgerError } = await supabase.from("staff_financial_ledgers").insert(ledgersToInsert);
-      if (ledgerError) console.error("Falha ao registar a comissão no livro razão:", ledgerError);
+      if (ledgerError) console.error("⚠️ [PDV AVISO] Falha ao registar a comissão no livro razão:", ledgerError);
     }
 
     // 4. MÁQUINA DE ESTADOS: ATUALIZAR FILA OU AGENDA PARA COMPLETED
     if (parsed.data.sourceId && parsed.data.sourceType) {
       if (parsed.data.sourceType === "appointment") {
-        await supabase.from("appointments").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+        const { error: appError } = await supabase.from("appointments").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+        if (appError) console.error("⚠️ [PDV AVISO] Falha ao dar baixa na Agenda:", appError);
       } else if (parsed.data.sourceType === "queue") {
-        await supabase.from("virtual_queue").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+        const { error: queueError } = await supabase.from("virtual_queue").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+        if (queueError) console.error("⚠️ [PDV AVISO] Falha ao dar baixa na Fila Virtual:", queueError);
       }
     }
 
@@ -135,6 +156,8 @@ export async function POST(req: Request) {
     
     return NextResponse.json({ success: true, orderId: order.id });
   } catch (e) {
+    // AGORA ELE VAI GRITAR O ERRO NO TERMINAL EM VEZ DE ESCONDER!
+    console.error("🚨🚨 [PDV CATCH FATAL] Erro não tratado na rota de checkout:", e);
     return NextResponse.json({ error: "Erro interno no servidor." }, { status: 500 });
   }
 }

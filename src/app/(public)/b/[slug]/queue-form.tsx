@@ -1,9 +1,9 @@
 // src/app/(public)/b/[slug]/queue-form.tsx
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react"; // <-- useRef adicionado aqui
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Turnstile } from "@marsidev/react-turnstile";
+import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -40,10 +40,14 @@ interface QueueRowPayload {
 }
 
 export default function QueueForm({ barbershopId, barbershopName, barbers, user, isLocal, initialWaitingCount, initialQueueData, initialUserPosition }: QueueFormProps) {
+  
+  // Função auxiliar para identificar se o status representa o fim da jornada na fila
+  const isTerminalStatus = (status: string | null) => status === "awaiting_payment" || status === "completed";
+
   const [waitingCount, setWaitingCount] = useState(initialWaitingCount);
   const [userPosition, setUserPosition] = useState<number | null>(initialUserPosition);
   
-  const [inQueue, setInQueue] = useState(!!initialQueueData && initialQueueData.status !== "finished"); 
+  const [inQueue, setInQueue] = useState(!!initialQueueData && !isTerminalStatus(initialQueueData.status)); 
   const [currentStatus, setCurrentStatus] = useState<string | null>(initialQueueData?.status || null);
   const [queueId, setQueueId] = useState<string | null>(initialQueueData?.id || null);
   const [barberName, setBarberName] = useState<string | null>(initialQueueData?.barber_name || null);
@@ -61,8 +65,8 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
-  // REFERÊNCIA PARA RESETAR O WIDGET DE SEGURANÇA
-  const turnstileRef = useRef<any>(null); 
+  // REFERÊNCIA TIPADA PARA EVITAR O ERRO 'ANY'
+  const turnstileRef = useRef<TurnstileInstance>(null); 
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   
   const [loading, setLoading] = useState(false);
@@ -123,7 +127,7 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
               setChairNumber(newRow.chair_number);
               setHasRated(newRow.is_rated);
               setJoinedAt(newRow.joined_at);
-              setInQueue(newRow.status !== "finished");
+              setInQueue(!isTerminalStatus(newRow.status));
             }
           }
           updateGlobalCountAndPosition();
@@ -185,7 +189,6 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
       
       if (result.error) {
         toast.error(result.error);
-        // >>> MÁGICA DO RESET: Apaga o token velho e pede um novo ao widget
         turnstileRef.current?.reset();
         setTurnstileToken(null);
       }
@@ -193,7 +196,6 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
     } catch (error) {
       console.error(error);
       toast.error("Erro de conexão. Tente novamente.");
-      // >>> MÁGICA DO RESET
       turnstileRef.current?.reset();
       setTurnstileToken(null);
       setLoading(false);
@@ -265,7 +267,7 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
   return (
     <div className="w-full space-y-6">
       
-      {currentStatus !== "finished" && (
+      {!isTerminalStatus(currentStatus) && (
         <div className="flex items-center justify-center gap-8 py-4 border-b border-slate-100 mb-2">
            <div className="flex flex-col items-center">
              <Users className="text-blue-500 mb-1" size={24} />
@@ -281,13 +283,13 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
         </div>
       )}
 
-      {user && !isScanning && !showManualPin && currentStatus !== "finished" && (
+      {user && !isScanning && !showManualPin && !isTerminalStatus(currentStatus) && (
          <p className="text-sm font-medium text-slate-600 text-center">
            Olá, <span className="font-bold text-slate-900">{userName}</span>!
          </p>
       )}
 
-      {currentStatus === "finished" && (
+      {isTerminalStatus(currentStatus) && (
         <div className="w-full animate-in zoom-in duration-300">
           {!hasRated ? (
             <div className="bg-white border-2 border-amber-100 rounded-[2rem] p-6 shadow-xl shadow-amber-100/50 flex flex-col items-center space-y-6">
@@ -367,7 +369,7 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
         </div>
       )}
 
-      {inQueue && currentStatus !== "finished" && (
+      {inQueue && !isTerminalStatus(currentStatus) && (
         <div className="w-full">
           {currentStatus === "in_progress" || currentStatus === "serving" ? (
             <div className="space-y-4 animate-in zoom-in duration-500 flex flex-col items-center py-4 bg-emerald-50/60 rounded-[2rem] border border-emerald-100 p-4">
@@ -412,7 +414,7 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
         </div>
       )}
 
-      {!inQueue && currentStatus !== "finished" && (
+      {!inQueue && !isTerminalStatus(currentStatus) && (
         <>
           {!user && (
             <Button onClick={handleGoogleLogin} disabled={loading} variant="outline" className="w-full h-14 rounded-2xl border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-all shadow-sm">
@@ -488,7 +490,6 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
               </div>
 
               <div className="flex justify-center w-full min-h-16.25">
-                {/* ADIÇÃO DO ref={turnstileRef} */}
                 <Turnstile ref={turnstileRef} siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
               </div>
               

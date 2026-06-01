@@ -39,6 +39,14 @@ export async function joinQueueAction(data: {
 export async function updateQueueStatusAction(id: string, status: string, barberId?: string) {
   const supabase = await createClient();
   
+  // ==========================================
+  // INTERCEPTADOR DA MÁQUINA DE ESTADOS
+  // ==========================================
+  // Se o botão do Front-end enviar o status antigo, convertemos para o novo fluxo.
+  if (status === "finished") {
+    status = "awaiting_payment";
+  }
+
   type QueueUpdatePayload = {
     status: string;
     barber_id?: string | null;
@@ -98,7 +106,8 @@ export async function updateQueueStatusAction(id: string, status: string, barber
     updateData.chair_number = chairName || "Cadeira Principal";
   }
 
-  if (status === "finished" || status === "canceled") {
+  // ATUALIZADO: Libera a cadeira do barbeiro quando vai pro Caixa (Aguardando Pagamento), Concluído ou Cancelado
+  if (status === "awaiting_payment" || status === "completed" || status === "canceled") {
     updateData.chair_number = null; 
   }
 
