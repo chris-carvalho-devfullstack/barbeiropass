@@ -1,7 +1,7 @@
 "use client";
 
 export const dynamic = "force-dynamic";
-export const runtime = "edge"; // <-- ADICIONAR AQUI
+export const runtime = "edge"; // <-- ADICIONADO AQUI
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
@@ -13,10 +13,22 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge"; // <-- IMPORTAÇÃO DO BADGE
 
-// Tipagens...
+// Tipagens (Atualizadas com a segurança Zero Trust e sem ANY)
 type QueueStatus = "waiting" | "in_progress" | "finished" | "cancelled";
-interface QueueItem { id: string; client_name: string; client_id: string | null; status: "waiting" | "in_progress"; joined_at: string; }
+
+interface QueueItem { 
+  id: string; 
+  client_name: string; 
+  client_id: string | null; 
+  status: "waiting" | "in_progress"; 
+  joined_at: string; 
+  barber_name: string | null; 
+  barber_id: string | null;
+  staff: { full_name: string } | { full_name: string }[] | null; // Join com a tabela staff
+}
+
 interface BarbershopInfo { id: string; slug: string; }
 interface MemberResponse { barbershop_id: string; barbershops: { slug: string; } | null; }
 
@@ -38,7 +50,8 @@ export default function FilaDashboard() {
     try {
       const { data, error } = await supabase
         .from("virtual_queue")
-        .select("id, client_name, client_id, status, joined_at")
+        // MÁGICA ZERO TRUST: Busca os dados atuais e faz o join com a tabela staff para ver a preferência
+        .select("id, client_name, client_id, status, joined_at, barber_name, barber_id, staff(full_name)")
         .eq("barbershop_id", bid)
         .in("status", ["waiting", "in_progress"])
         .order("joined_at", { ascending: true });
@@ -268,7 +281,9 @@ export default function FilaDashboard() {
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  
+                  {/* TAGS DE STATUS E PREFERÊNCIA AQUI */}
+                  <div className="flex gap-2 items-center">
                     {item.status === 'in_progress' ? (
                       <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase tracking-wider border border-emerald-200">
                         Na Cadeira
@@ -278,6 +293,28 @@ export default function FilaDashboard() {
                         Aguardando
                       </span>
                     )}
+
+                    {/* LÓGICA DA TAG DO BARBEIRO (Seguro e sem any) */}
+                    {(() => {
+                      let displayName = null;
+                      let prefix = "Pref:";
+
+                      if (item.status === "in_progress" && item.barber_name) {
+                        displayName = item.barber_name; // Mostra quem realmente está atendendo
+                        prefix = "Com:";
+                      } else if (item.status === "waiting" && item.staff) {
+                        displayName = Array.isArray(item.staff) ? item.staff[0]?.full_name : item.staff.full_name; // Mostra a preferência
+                      }
+
+                      if (!displayName) return null;
+
+                      return (
+                        <Badge variant="secondary" className="text-[10px] font-bold text-slate-600 bg-slate-100 uppercase tracking-wider px-2 py-0.5 rounded-lg border border-slate-200 pointer-events-none">
+                          {prefix} {displayName}
+                        </Badge>
+                      );
+                    })()}
+
                   </div>
                 </div>
               </div>

@@ -9,7 +9,7 @@ export async function joinQueueAction(data: {
   barbershop_id: string; 
   client_name: string; 
   client_id?: string | null;
-  barber_id?: string | null; // Novo: Recebe a preferência do cliente
+  barber_id?: string | null;
 }) {
   const supabase = await createClient();
 
@@ -19,7 +19,7 @@ export async function joinQueueAction(data: {
       barbershop_id: data.barbershop_id,
       client_name: data.client_name,
       client_id: data.client_id || null,
-      barber_id: data.barber_id || null, // Grava a escolha ou null se for "Qualquer um"
+      barber_id: data.barber_id || null,
       status: 'waiting'
     });
 
@@ -35,52 +35,71 @@ export async function joinQueueAction(data: {
   return { success: true };
 }
 
-// 2. Atualizar Status (Para uso interno da Barbearia)
+// 2. Atualizar Status (Para uso interno da Barbearia - ZERO TRUST)
 export async function updateQueueStatusAction(id: string, status: string, barberId?: string) {
   const supabase = await createClient();
   
-  // Tipagem estrita para o payload
   type QueueUpdatePayload = {
     status: string;
-    barber_id?: string;    // Novo: vincula o id real do barbeiro no banco
-    barber_name?: string;  // Manter para compatibilidade visual
+    barber_id?: string | null;
+    barber_name?: string | null;
+    chair_number?: string | null;
   };
 
   const updateData: QueueUpdatePayload = { status };
 
-  // Se o profissional está a iniciar o atendimento
-  if (status === "serving") {
-    // Se o barberId não foi passado, tenta buscar o ID do staff logado
+  if (status === "serving" || status === "in_progress") {
     let finalBarberId = barberId;
+    let staffRecord = null;
     
     if (!finalBarberId) {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: staff } = await supabase
           .from("staff")
-          .select("id, full_name")
+          .select(`id, full_name, work_stations ( name )`)
           .eq("profile_id", user.id)
           .maybeSingle();
           
         if (staff) {
           finalBarberId = staff.id;
-          updateData.barber_name = staff.full_name;
+          staffRecord = staff;
         }
       }
     } else {
-      // Se recebemos um barberId explícito, buscamos apenas o nome para manter a consistência
       const { data: staff } = await supabase
         .from("staff")
-        .select("full_name")
-        .eq("id", barberId)
+        .select(`full_name, work_stations ( name )`)
+        .eq("id", finalBarberId)
         .single();
         
-      if (staff) updateData.barber_name = staff.full_name;
+      if (staff) {
+        staffRecord = staff;
+      }
     }
 
-    if (finalBarberId) {
-      updateData.barber_id = finalBarberId;
+    if (!finalBarberId || !staffRecord) {
+      return { 
+        error: "Para iniciar o atendimento, selecione um profissional responsável ou vincule seu perfil a uma cadeira." 
+      };
     }
+
+    updateData.barber_id = finalBarberId;
+    updateData.barber_name = staffRecord.full_name;
+    
+    // RESOLUÇÃO DO ERRO 'ANY': Tipagem segura para a resposta dinâmica do Supabase
+    type WorkStationData = { name?: string } | { name?: string }[] | null;
+    const workStations = staffRecord.work_stations as WorkStationData;
+
+    const chairName = Array.isArray(workStations) 
+      ? workStations[0]?.name 
+      : workStations?.name;
+
+    updateData.chair_number = chairName || "Cadeira Principal";
+  }
+
+  if (status === "finished" || status === "canceled") {
+    updateData.chair_number = null; 
   }
 
   const { error } = await supabase
@@ -108,7 +127,6 @@ export async function addManualClientAction(barbershopId: string, clientName: st
   try {
     const supabase = await createClient();
     
-    // Verifica se o usuário que está a adicionar está logado (Segurança Zero Trust)
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { success: false, error: "Não autorizado." };
 
@@ -117,14 +135,13 @@ export async function addManualClientAction(barbershopId: string, clientName: st
       .insert({
         barbershop_id: barbershopId,
         client_name: clientName,
-        barber_id: barberId || null, // Permite à recepcionista definir a preferência
-        is_authenticated: false, // Marca como inserção manual para auditoria
+        barber_id: barberId || null,
+        is_authenticated: false, 
         status: "waiting",
       });
 
     if (error) throw error;
     
-    // Força a atualização de todas as rotas relevantes
     revalidatePath("/fila");
     revalidatePath("/pdv");
     revalidatePath("/b/[slug]", "page");
@@ -143,7 +160,6 @@ export async function generateNewPinAction(barbershopId: string) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { success: false, error: "Não autorizado." };
 
-    // Gera um PIN de 4 dígitos aleatório (1000 a 9999)
     const newPin = Math.floor(1000 + Math.random() * 9000).toString();
 
     const { error } = await supabase
@@ -190,7 +206,6 @@ export async function submitReviewAction(
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     
-    // Insere a avaliação com as duas notas distintas
     const { error: reviewError } = await supabase
       .from("reviews")
       .insert({
@@ -206,7 +221,6 @@ export async function submitReviewAction(
 
     if (reviewError) throw reviewError;
 
-    // Atualiza a flag na fila
     const { error: queueError } = await supabase
       .from("virtual_queue")
       .update({ is_rated: true })

@@ -35,8 +35,10 @@ export function UserNav() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isMounted, setIsMounted] = useState(false); // <-- NOVO: Controle de hidratação
 
   useEffect(() => {
+    setIsMounted(true); // Indica que o componente já rodou no cliente
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) setUser(user);
       setLoading(false);
@@ -57,14 +59,29 @@ export function UserNav() {
     }
   }
 
+  // Se não estiver montado, renderiza o botão neutro idêntico ao servidor para evitar Hydration Error
+  if (!isMounted) {
+    return (
+      <Button
+        variant="ghost"
+        disabled // Servidor e estado inicial assumem disabled true/loading
+        className="flex items-center gap-3 h-auto px-1.5 py-1.5 rounded-full hover:bg-zinc-100 transition-all focus-visible:ring-zinc-950"
+      >
+        <div className="relative h-9 w-9 shrink-0 rounded-full ring-1 ring-zinc-200 bg-zinc-50 overflow-hidden flex items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-zinc-400" />
+        </div>
+      </Button>
+    );
+  }
+
   /// Extração de dados cobrindo todas as chaves possíveis do seu formulário e do Google
   const email = user?.email || "";
   const nomeCompleto =
-    user?.user_metadata?.fullName || // Vem do seu formulário de cadastro (Zod)
-    user?.user_metadata?.nome ||     // Outra variação comum em pt-BR
-    user?.user_metadata?.full_name || // Vem do login social (Google)
-    user?.user_metadata?.name ||     // Vem do login social (Google)
-    user?.user_metadata?.nome_barbearia || // Antigo fallback que você tinha
+    user?.user_metadata?.fullName ||
+    user?.user_metadata?.nome ||
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.user_metadata?.nome_barbearia ||
     "Administrador";
     
   const displayNameHeader = getFirstAndLastName(nomeCompleto);
@@ -85,14 +102,12 @@ export function UserNav() {
 
   return (
     <DropdownMenu>
-      {/* TRIGGER ATUALIZADO: Agora é um contêiner flexível com Foto e Nome */}
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           disabled={loading}
           className="flex items-center gap-3 h-auto px-1.5 py-1.5 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all cursor-pointer focus-visible:ring-zinc-950 dark:focus-visible:ring-zinc-300"
         >
-          {/* Contêiner da Foto/Avatar */}
           <div className="relative h-9 w-9 shrink-0 rounded-full ring-1 ring-zinc-200 dark:ring-zinc-700 bg-zinc-50 dark:bg-zinc-900 overflow-hidden flex items-center justify-center">
             {loading ? (
               <Loader2 className="size-4 animate-spin text-zinc-400" />
@@ -110,7 +125,6 @@ export function UserNav() {
             )}
           </div>
 
-          {/* Textos no Header (Nome e Role) - Escondido no mobile, visível do sm up */}
           {!loading && (
             <div className="hidden sm:flex flex-col items-start leading-tight pr-1">
               <span className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
@@ -131,7 +145,6 @@ export function UserNav() {
         align="end"
         forceMount
       >
-        {/* Cabeçalho do Dropdown (Nome Completo e ID) */}
         <DropdownMenuLabel className="font-normal p-3">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-bold leading-none text-zinc-950 dark:text-zinc-50 truncate">
