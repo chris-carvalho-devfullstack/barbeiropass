@@ -12,7 +12,7 @@ import {
 import { toast } from "sonner";
 import { 
   Barcode, Trash2, CreditCard, Banknote, QrCode, Loader2, 
-  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, ArrowRight, X, UserPlus, Sparkles
+  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, ArrowRight, X, UserPlus, Sparkles, Scissors
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // =========================================================================
-// TIPAGENS DE ESTRUTURA
+// TIPAGENS DE ESTRUTURA E APIs
 // =========================================================================
 type PaymentMethod = "pix" | "credit_card" | "debit_card" | "cash";
 
@@ -40,23 +40,23 @@ type ClientSuggestion = {
   phone?: string | null;
 };
 
-type PendingAppointment = {
+// Tipagem baseada na resposta da API unificada
+type PendingClient = {
   id: string;
-  client_id: string;
-  client_name: string;
-  client_phone: string | null;
-  scheduled_at: string;
+  clientName: string;
+  clientId: string | null;
+  barberId: string | null;
+  barberName: string | null;
+  origin: "queue" | "appointment";
+  time: string;
+  serviceId?: string | null;
+  serviceName?: string | null;
+  servicePrice?: number | null;
 };
 
-type PendingQueue = {
-  id: string;
-  client_name: string;
-  status: "waiting" | "in_progress"; // Tipagem do status da fila
-};
-
-type PendingClientsData = {
-  appointments: PendingAppointment[];
-  queue: PendingQueue[];
+type CheckoutContext = {
+  sourceId: string | null;
+  sourceType: "queue" | "appointment" | null;
 };
 
 export default function PDVPage() {
@@ -67,6 +67,7 @@ export default function PDVPage() {
     isSaleActive, client, items, startSale, cancelSale, 
     addItem, removeItem, updateQuantity, getCartTotal, clearCart 
   } = usePDVStore();
+  
   const cartTotal = getCartTotal();
 
   const [searchInput, setSearchInput] = useState("");
@@ -80,9 +81,14 @@ export default function PDVPage() {
   const [isStartModalOpen, setIsStartModalOpen] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [clientSuggestions, setClientSuggestions] = useState<ClientSuggestion[]>([]);
-  const [pendingClients, setPendingClients] = useState<PendingClientsData>({ appointments: [], queue: [] });
+  
+  // Lista unificada vinda da API
+  const [pendingClients, setPendingClients] = useState<PendingClient[]>([]);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
+
+  // Guarda a origem da venda para dar baixa corretamente (Máquina de Estados)
+  const [checkoutContext, setCheckoutContext] = useState<CheckoutContext>({ sourceId: null, sourceType: null });
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -110,7 +116,7 @@ export default function PDVPage() {
     if (isStartModalOpen) {
       setIsLoadingPending(true);
       getPendingClientsForPDV().then((res) => {
-        if (!res.error) setPendingClients(res as unknown as PendingClientsData);
+        if (!res.error) setPendingClients(res as unknown as PendingClient[]);
         setIsLoadingPending(false);
       });
     }
@@ -147,11 +153,45 @@ export default function PDVPage() {
   // =========================================================================
   // AÇÕES DO USUÁRIO
   // =========================================================================
-  const handleStartSale = (selectedClient: SelectedClient | null) => {
+  
+  // Atualizado para receber contexto de origem e carrinho automático
+  const handleStartSale = (
+    selectedClient: SelectedClient | null, 
+    context?: CheckoutContext, 
+    autoService?: { id: string; name: string; price: number; barberId: string | null }
+  ) => {
     startSale(selectedClient);
+    
+    if (context) {
+      setCheckoutContext(context);
+    } else {
+      setCheckoutContext({ sourceId: null, sourceType: null });
+    }
+
+    // Carrinho inteligente: adiciona o serviço se já veio pré-selecionado (Agendamentos)
+    // Usamos Record<string, unknown> para evitar o erro do "any"
+    if (autoService) {
+      const newItem = { 
+        id: autoService.id, 
+        code: "AGENDADO", 
+        name: autoService.name, 
+        type: "service", 
+        displayPrice: autoService.price,
+        barberId: autoService.barberId 
+      };
+      
+      addItem(newItem as unknown as Parameters<typeof addItem>[0]);
+      toast.success(`${autoService.name} adicionado automaticamente.`);
+    }
+
     setIsStartModalOpen(false);
     setClientSearch("");
     setClientSuggestions([]);
+  };
+
+  const handleCancelSale = () => {
+    cancelSale();
+    setCheckoutContext({ sourceId: null, sourceType: null });
   };
 
   const handleQuickCreateClient = async () => {
@@ -184,18 +224,27 @@ export default function PDVPage() {
     setIsCheckingOut(true);
 
     const payload = {
-      cashRegisterId: "00000000-0000-0000-0000-000000000000",
+      cashRegisterId: "00000000-0000-0000-0000-000000000000", // Isso deve ser atrelado ao caixa aberto real depois
       paymentMethod,
       clientId: client?.id || null,
-      items: items.map(i => ({ id: i.id, type: i.type, quantity: i.quantity }))
+      sourceId: checkoutContext.sourceId,
+      sourceType: checkoutContext.sourceType,
+      items: items.map(i => ({ 
+        id: i.id, 
+        type: i.type, 
+        quantity: i.quantity, 
+        // Verificação segura de tipagem para extrair o barbeiro anexado ao item
+        barberId: "barberId" in i ? String(i.barberId) : null
+      }))
     };
 
     const result = await processCheckout(payload);
     if (result?.error) {
       toast.error(result.error);
     } else {
-      toast.success("Venda finalizada com sucesso!");
+      toast.success("Venda e recebimento concluídos!");
       clearCart();
+      setCheckoutContext({ sourceId: null, sourceType: null });
       setIsSheetOpen(false);
     }
     setIsCheckingOut(false);
@@ -205,6 +254,10 @@ export default function PDVPage() {
   const formatTime = (isoDate: string) => {
     return new Date(isoDate).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   };
+
+  // Separa a fila e agenda para exibição
+  const queueClients = pendingClients.filter(c => c.origin === "queue");
+  const appointmentClients = pendingClients.filter(c => c.origin === "appointment");
 
   // =========================================================================
   // RENDERIZAÇÃO: TELA 1 (OCIOSA / TOTEM)
@@ -238,36 +291,34 @@ export default function PDVPage() {
 
             <div className="p-6 space-y-6 max-h-[60vh] overflow-y-auto">
               {/* Integração: Fila e Agenda com Etiquetas Visuais */}
-              {(!isLoadingPending && (pendingClients.queue.length > 0 || pendingClients.appointments.length > 0)) && (
+              {(!isLoadingPending && pendingClients.length > 0) && (
                 <div className="space-y-3">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Aguardando no Salão</span>
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Prontos para Pagamento</span>
                   <div className="grid gap-2">
                     
                     {/* Lista da Fila Virtual */}
-                    {pendingClients.queue.map(q => (
-                      <button key={q.id} onClick={() => handleStartSale({ name: q.client_name, source: 'queue' })} className="flex items-center justify-between p-3 bg-white border border-blue-200 rounded-xl hover:bg-blue-50 transition-colors text-left group shadow-sm hover:shadow">
+                    {queueClients.map(q => (
+                      <button 
+                        key={q.id} 
+                        onClick={() => handleStartSale(
+                          { id: q.clientId || undefined, name: q.clientName, source: 'queue' }, 
+                          { sourceId: q.id, sourceType: "queue" }
+                        )} 
+                        className="flex items-center justify-between p-3 bg-white border border-blue-200 rounded-xl hover:bg-blue-50 transition-colors text-left group shadow-sm hover:shadow"
+                      >
                         <div className="flex items-center gap-3">
                           <div className="bg-blue-100 text-blue-600 p-2.5 rounded-xl"><Users className="h-5 w-5" /></div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <p className="font-bold text-slate-900 leading-tight">{q.client_name}</p>
-                              
-                              {/* ETIQUETAS VISUAIS DE STATUS */}
-                              {q.status === 'in_progress' ? (
-                                <span className="flex items-center gap-1.5 text-[10px] font-black bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-md uppercase tracking-wider border border-emerald-200">
-                                  <span className="relative flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600"></span>
-                                  </span>
-                                  Em Atendimento
-                                </span>
-                              ) : (
-                                <span className="text-[10px] font-black bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-md uppercase tracking-wider border border-amber-200">
-                                  Aguardando
-                                </span>
-                              )}
+                              <p className="font-bold text-slate-900 leading-tight">{q.clientName}</p>
+                              <span className="flex items-center gap-1.5 text-[10px] font-black bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-md uppercase tracking-wider border border-emerald-200">
+                                <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-600"></span></span>
+                                Caixa Livre
+                              </span>
                             </div>
-                            <p className="text-xs text-slate-500 mt-1 font-medium">Fila Virtual</p>
+                            <p className="text-xs text-slate-500 mt-1 font-medium">
+                              Fila Virtual {q.barberName ? `• Por ${q.barberName.split(" ")[0]}` : ''}
+                            </p>
                           </div>
                         </div>
                         <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-blue-600 transition-transform group-hover:translate-x-1" />
@@ -275,18 +326,31 @@ export default function PDVPage() {
                     ))}
 
                     {/* Lista de Agendamentos */}
-                    {pendingClients.appointments.map(a => (
-                      <button key={a.id} onClick={() => handleStartSale({ id: a.client_id, name: a.client_name, phone: a.client_phone, source: 'appointment' })} className="flex items-center justify-between p-3 bg-white border border-purple-200 rounded-xl hover:bg-purple-50 transition-colors text-left group shadow-sm hover:shadow">
+                    {appointmentClients.map(a => (
+                      <button 
+                        key={a.id} 
+                        onClick={() => handleStartSale(
+                          { id: a.clientId || undefined, name: a.clientName, source: 'appointment' },
+                          { sourceId: a.id, sourceType: "appointment" },
+                          (a.serviceId && a.servicePrice != null) 
+                            ? { id: a.serviceId, name: a.serviceName || "Serviço", price: Number(a.servicePrice), barberId: a.barberId } 
+                            : undefined
+                        )} 
+                        className="flex items-center justify-between p-3 bg-white border border-purple-200 rounded-xl hover:bg-purple-50 transition-colors text-left group shadow-sm hover:shadow"
+                      >
                         <div className="flex items-center gap-3">
                           <div className="bg-purple-100 text-purple-600 p-2.5 rounded-xl"><CalendarClock className="h-5 w-5" /></div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <p className="font-bold text-slate-900 leading-tight">{a.client_name}</p>
+                              <p className="font-bold text-slate-900 leading-tight">{a.clientName}</p>
                               <span className="text-[10px] font-black bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-md uppercase tracking-wider border border-purple-200">
-                                {formatTime(a.scheduled_at)}
+                                {formatTime(a.time)}
                               </span>
                             </div>
-                            <p className="text-xs text-slate-500 mt-1 font-medium">Agendamento</p>
+                            <p className="text-xs text-slate-500 mt-1 font-medium flex items-center gap-1">
+                              Agendado {a.barberName ? `• Por ${a.barberName.split(" ")[0]}` : ''} 
+                              {a.serviceName && <span className="flex items-center gap-0.5"><Scissors className="h-3 w-3 inline" /> {a.serviceName}</span>}
+                            </p>
                           </div>
                         </div>
                         <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-purple-600 transition-transform group-hover:translate-x-1" />
@@ -361,7 +425,7 @@ export default function PDVPage() {
                 <p className="font-bold text-slate-900 leading-tight">{client?.name || "Cliente Avulso"}</p>
               </div>
             </div>
-            <Button variant="ghost" size="sm" onClick={cancelSale} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-bold h-9 rounded-lg transition-colors">
+            <Button variant="ghost" size="sm" onClick={handleCancelSale} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-bold h-9 rounded-lg transition-colors">
               <X className="h-4 w-4 mr-1" /> Cancelar
             </Button>
           </header>

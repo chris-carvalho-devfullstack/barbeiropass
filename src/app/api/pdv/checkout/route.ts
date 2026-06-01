@@ -5,11 +5,16 @@ import { createClient } from "@/utils/supabase/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+// 1. Zod Schema Atualizado para a Nova Arquitetura
 const checkoutSchema = z.object({
   cashRegisterId: z.string().uuid("Caixa inválido"),
   paymentMethod: z.enum(["pix", "credit_card", "debit_card", "cash"]),
   clientId: z.string().uuid().optional().nullable(),
-  appointmentId: z.string().uuid().optional().nullable(), // Adicionado para vinculação
+  
+  // NOVOS CAMPOS: Elo de Ligação com Fila/Agenda
+  sourceId: z.string().uuid().optional().nullable(), // ID da fila ou do agendamento
+  sourceType: z.enum(["queue", "appointment"]).optional().nullable(), // De onde veio
+  
   items: z.array(z.object({
     id: z.string().uuid(),
     type: z.enum(["product", "service"]),
@@ -33,7 +38,7 @@ export async function POST(req: Request) {
 
     let realTotalAmount = 0;
     const orderItemsToInsert = [];
-    const ledgersToInsert = []; // Array para guardar os pagamentos aos barbeiros
+    const ledgersToInsert = []; 
 
     for (const item of parsed.data.items) {
       let unitPrice = 0;
@@ -47,7 +52,6 @@ export async function POST(req: Request) {
         unitPrice = product.price;
         await supabase.from("products").update({ stock_quantity: product.stock_quantity - item.quantity }).eq("id", item.id);
         
-        // Adiciona ao pedido sem comissão (produtos geralmente não têm, mas pode adaptar no futuro)
         orderItemsToInsert.push({
           item_type: item.type, product_id: item.id, service_id: null,
           quantity: item.quantity, unit_price: unitPrice, commission_amount: 0, barber_id: null
@@ -70,11 +74,11 @@ export async function POST(req: Request) {
           if (comm && comm.commission_percentage > 0) {
             commissionAmount = (unitPrice * item.quantity) * (Number(comm.commission_percentage) / 100);
             
-            // Preparar o lançamento para o Ledger Financeiro
+            // Lançamento para o Ledger Financeiro
             ledgersToInsert.push({
               barbershop_id: member.barbershop_id,
               staff_id: item.barberId,
-              appointment_id: parsed.data.appointmentId || null,
+              appointment_id: parsed.data.sourceType === "appointment" ? parsed.data.sourceId : null,
               transaction_type: "commission_earned",
               amount: commissionAmount,
               description: `Comissão - ${service.name}`
@@ -94,8 +98,11 @@ export async function POST(req: Request) {
 
     // 1. Criar a Ordem de Venda (POS Order)
     const { data: order, error: orderError } = await supabase.from("pos_orders").insert({
-      barbershop_id: member.barbershop_id, cash_register_id: parsed.data.cashRegisterId, customer_id: parsed.data.clientId || null,
-      total_amount: realTotalAmount, payment_method: parsed.data.paymentMethod
+      barbershop_id: member.barbershop_id, 
+      cash_register_id: parsed.data.cashRegisterId, 
+      customer_id: parsed.data.clientId || null,
+      total_amount: realTotalAmount, 
+      payment_method: parsed.data.paymentMethod
     }).select("id").single();
 
     if (orderError) return NextResponse.json({ error: "Erro ao registar a venda." }, { status: 500 });
@@ -105,19 +112,26 @@ export async function POST(req: Request) {
     const { error: itemsError } = await supabase.from("pos_order_items").insert(itemsComOrderId);
     if (itemsError) return NextResponse.json({ error: "Erro ao salvar os itens da venda." }, { status: 500 });
 
-    // 3. DISTRIBUIR O DINHEIRO (Inserir no Ledger)
+    // 3. DISTRIBUIR O DINHEIRO (Inserir no Ledger do Barbeiro)
     if (ledgersToInsert.length > 0) {
       const { error: ledgerError } = await supabase.from("staff_financial_ledgers").insert(ledgersToInsert);
       if (ledgerError) console.error("Falha ao registar a comissão no livro razão:", ledgerError);
     }
 
-    // 4. ATUALIZAR AGENDA (Se vier de um agendamento, marca como 'completed')
-    if (parsed.data.appointmentId) {
-      await supabase.from("appointments").update({ status: "completed" }).eq("id", parsed.data.appointmentId);
+    // 4. MÁQUINA DE ESTADOS: ATUALIZAR FILA OU AGENDA PARA COMPLETED
+    if (parsed.data.sourceId && parsed.data.sourceType) {
+      if (parsed.data.sourceType === "appointment") {
+        await supabase.from("appointments").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+      } else if (parsed.data.sourceType === "queue") {
+        await supabase.from("virtual_queue").update({ status: "completed" }).eq("id", parsed.data.sourceId);
+      }
     }
 
+    // Atualiza o cache de todas as telas afetadas para que a UI reflita a mudança na hora
     revalidatePath("/dashboard/pdv");
-    revalidatePath("/equipe/staff"); // Força o Next.js a atualizar o painel do barbeiro
+    revalidatePath("/equipe/staff"); // Faturamento e Histórico do barbeiro
+    revalidatePath("/fila");         // Limpa o cliente da Fila
+    revalidatePath("/agendamentos"); // Limpa o cliente da Agenda
     
     return NextResponse.json({ success: true, orderId: order.id });
   } catch (e) {

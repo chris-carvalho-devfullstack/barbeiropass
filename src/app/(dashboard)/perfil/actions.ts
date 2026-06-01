@@ -55,12 +55,20 @@ const settingsSchema = z.object({
   }),
 });
 
+const profileUpdateSchema = z.object({
+  nome: z.string().min(2, "O nome deve ter pelo menos 2 caracteres"),
+  telefone: z.string().optional(),
+  cargo: z.enum(["owner", "manager", "receptionist"]),
+  isBarber: z.boolean(),
+});
+
 // --- INTERFACES DE TIPAGEM ---
 
 export type LocationFormData = z.infer<typeof locationSchema>;
 export type BusinessHourItem = z.infer<typeof businessHourSchema>[number];
 export type AppearanceFormData = z.infer<typeof appearanceSchema>;
 export type BarbershopSettingsData = z.infer<typeof settingsSchema>;
+export type ProfileUpdateData = z.infer<typeof profileUpdateSchema>;
 
 // ============================================================================
 // AUXILIAR: BUSCA BARBEARIA DO USUÁRIO
@@ -152,6 +160,109 @@ export async function refreshOnboardingScore(barbershopId: string): Promise<numb
 // ============================================================================
 // SERVER ACTIONS
 // ============================================================================
+
+/**
+ * Atualiza o Perfil do Utilizador, Cargo Administrativo e Status de Barbeiro
+ */
+export async function updateUserProfileSettings(data: ProfileUpdateData) {
+  const parsed = profileUpdateSchema.safeParse(data);
+  if (!parsed.success) return { error: "Dados inválidos." };
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Não autorizado" };
+
+  const barbershopId = await getBarbershopId(user.id);
+  if (!barbershopId) return { error: "Barbearia não encontrada" };
+
+  // 1. CHECAGEM DE SEGURANÇA: Prevenir a perda do último proprietário
+  const { data: currentMember } = await supabase
+    .from("barbershop_members")
+    .select("role")
+    .eq("barbershop_id", barbershopId)
+    .eq("profile_id", user.id)
+    .single();
+
+  if (currentMember?.role === "owner" && parsed.data.cargo !== "owner") {
+    const { count: ownerCount } = await supabase
+      .from("barbershop_members")
+      .select("*", { count: "exact", head: true })
+      .eq("barbershop_id", barbershopId)
+      .eq("role", "owner");
+
+    if (ownerCount && ownerCount <= 1) {
+      return { error: "A barbearia precisa ter pelo menos um proprietário ativo. Transfira a posse antes de alterar o seu cargo." };
+    }
+  }
+
+  // 2. Atualizar Tabela de Membros (Nível de Acesso)
+  const { error: memberError } = await supabase
+    .from("barbershop_members")
+    .update({ role: parsed.data.cargo })
+    .eq("barbershop_id", barbershopId)
+    .eq("profile_id", user.id);
+
+  if (memberError) return { error: "Erro ao atualizar permissões de acesso." };
+
+  // 3. Atualizar Tabela Staff (Operacional / Atendimento) - CORREÇÃO DO ERRO 42P10
+  if (parsed.data.isBarber) {
+    // Verifica manualmente se o utilizador já está na tabela staff
+    const { data: existingStaff } = await supabase
+      .from("staff")
+      .select("id")
+      .eq("barbershop_id", barbershopId)
+      .eq("profile_id", user.id)
+      .maybeSingle();
+
+    const avatarUrl = user.user_metadata?.avatar_url || null;
+
+    if (existingStaff) {
+      // Se já existe, atualiza
+      const { error: updateError } = await supabase
+        .from("staff")
+        .update({
+          role: "barber",
+          full_name: parsed.data.nome,
+          avatar_url: avatarUrl,
+          is_active: true,
+        })
+        .eq("id", existingStaff.id);
+        
+      if (updateError) console.error("[SECURITY LOG] Erro ao atualizar staff:", updateError);
+    } else {
+      // Se não existe, insere
+      const { error: insertError } = await supabase
+        .from("staff")
+        .insert({
+          barbershop_id: barbershopId,
+          profile_id: user.id,
+          role: "barber",
+          full_name: parsed.data.nome,
+          avatar_url: avatarUrl,
+          is_active: true,
+        });
+        
+      if (insertError) console.error("[SECURITY LOG] Erro ao inserir staff:", insertError);
+    }
+  } else {
+    // Se ele NÃO atua, desativamos (soft delete) para não perder histórico financeiro
+    await supabase
+      .from("staff")
+      .update({ is_active: false })
+      .eq("barbershop_id", barbershopId)
+      .eq("profile_id", user.id);
+  }
+
+  // 4. Atualizar Dados Pessoais na tabela Profiles
+  await supabase
+    .from("profiles")
+    .update({ full_name: parsed.data.nome, phone: parsed.data.telefone })
+    .eq("id", user.id);
+
+  revalidatePath("/perfil");
+  revalidatePath("/equipe/staff"); // Força o painel da equipe a recarregar
+  return { success: true };
+}
 
 /**
  * Atualiza a localização da barbearia

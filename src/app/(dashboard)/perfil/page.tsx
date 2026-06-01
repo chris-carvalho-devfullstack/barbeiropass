@@ -7,6 +7,7 @@ import { type User as SupabaseUser } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -32,8 +33,10 @@ import {
   Phone,
   Briefcase,
   Lock,
+  Scissors,
 } from "lucide-react";
 import { toast } from "sonner";
+import { updateUserProfileSettings } from "./actions";
 
 export default function PerfilPage() {
   const supabase = createClient();
@@ -47,7 +50,8 @@ export default function PerfilPage() {
   // Estados do Formulário
   const [nome, setNome] = useState("");
   const [telefone, setTelefone] = useState("");
-  const [cargo, setCargo] = useState("barbeiro");
+  const [cargo, setCargo] = useState("owner");
+  const [isBarber, setIsBarber] = useState(false);
   const [novaSenha, setNovaSenha] = useState("");
 
   useEffect(() => {
@@ -56,19 +60,49 @@ export default function PerfilPage() {
       
       if (user) {
         setUser(user);
-        const meta = user.user_metadata;
         
-        // Pega o nome cobrindo as chaves do Google e do nosso Form
-        setNome(meta?.full_name || meta?.fullName || meta?.name || meta?.nome_barbearia || "");
-        setTelefone(meta?.telefone || meta?.phone || "");
-        setCargo(meta?.cargo || meta?.role || "owner");
+        // Vamos buscar as informações REAIS no banco de dados (Fonte da Verdade)
+        
+        // 1. Tabela profiles
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("full_name, phone")
+          .eq("id", user.id)
+          .single();
+          
+        if (profile) {
+            setNome(profile.full_name || "");
+            setTelefone(profile.phone || "");
+        } else {
+            // Fallback para metadados caso o profile ainda não esteja sincronizado
+            const meta = user.user_metadata;
+            setNome(meta?.full_name || meta?.fullName || meta?.name || meta?.nome_barbearia || "");
+            setTelefone(meta?.telefone || meta?.phone || "");
+        }
+
+        // 2. Tabela barbershop_members (Cargo administrativo)
+        const { data: member } = await supabase
+          .from("barbershop_members")
+          .select("role")
+          .eq("profile_id", user.id)
+          .maybeSingle();
+          
+        if (member) setCargo(member.role);
+
+        // 3. Tabela staff (Atua como barbeiro?)
+        const { data: staffData } = await supabase
+          .from("staff")
+          .select("is_active")
+          .eq("profile_id", user.id)
+          .eq("role", "barber")
+          .maybeSingle();
+          
+        setIsBarber(!!staffData?.is_active);
       }
       setLoading(false);
     }
     carregarPerfil();
-  }, [supabase.auth]);
-
-  
+  }, [supabase]);
 
   async function handleSalvarPerfil(e: React.FormEvent) {
     e.preventDefault();
@@ -78,22 +112,24 @@ export default function PerfilPage() {
     try {
       if (!user) throw new Error("Usuário não encontrado.");
 
-      // 1. Atualiza a tabela de Autenticação (Para refletir no Header rápido)
-      const { error: authError } = await supabase.auth.updateUser({
-        data: {
-          full_name: nome, // Padronizado para full_name
-          phone: telefone,
-          role: cargo,
+      // 1. Chama a Server Action (Com segurança Zero Trust)
+      const result = await updateUserProfileSettings({
+        nome,
+        telefone,
+        cargo: cargo as "owner" | "manager" | "receptionist",
+        isBarber
+      });
+
+      if (result.error) throw new Error(result.error);
+
+      // 2. Atualiza a metadata localmente apenas para refletir rápido na UI (Header, etc)
+      await supabase.auth.updateUser({
+        data: { 
+          full_name: nome, 
+          phone: telefone, 
+          role: cargo 
         },
       });
-      if (authError) throw authError;
-
-      // 2. Atualiza também a tabela 'profiles' para manter o banco físico consistente
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ full_name: nome, phone: telefone })
-        .eq("id", user.id);
-      if (profileError) throw profileError;
 
       // 3. Troca de senha (se o campo não estiver vazio)
       if (novaSenha.trim() !== "") {
@@ -122,30 +158,25 @@ export default function PerfilPage() {
     const toastId = toast.loading("Enviando foto...");
 
     try {
-      // Cria um nome único para o arquivo usando o ID do usuário e a data atual
       const fileExt = file.name.split('.').pop();
       const fileName = `${user.id}-${Date.now()}.${fileExt}`;
 
-      // 1. Envia a imagem para o Bucket 'avatars'
       const { error: uploadError } = await supabase.storage
         .from("avatars")
         .upload(fileName, file, { upsert: true });
 
       if (uploadError) throw uploadError;
 
-      // 2. Pega a URL pública da imagem recém-enviada
       const { data: { publicUrl } } = supabase.storage
         .from("avatars")
         .getPublicUrl(fileName);
 
-      // 3. Atualiza os metadados do usuário com a nova URL
       const { error: updateError } = await supabase.auth.updateUser({
         data: { avatar_url: publicUrl },
       });
 
       if (updateError) throw updateError;
 
-      // 4. Atualiza o estado local para a imagem piscar na tela instantaneamente
       setUser({
         ...user,
         user_metadata: { ...user.user_metadata, avatar_url: publicUrl },
@@ -157,7 +188,6 @@ export default function PerfilPage() {
       toast.error(errorMessage, { id: toastId });
     } finally {
       setUploadingAvatar(false);
-      // Limpa o input para permitir enviar a mesma imagem de novo se quiser
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
@@ -276,31 +306,49 @@ export default function PerfilPage() {
           </CardContent>
         </Card>
 
+        {/* NOVA SEÇÃO: PERMISSÕES E ACESSOS */}
         <Card className="border-zinc-200 shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Briefcase className="size-5 text-zinc-900" /> Papel na Barbearia
+              <Briefcase className="size-5 text-zinc-900" /> Permissões e Acessos
             </CardTitle>
             <CardDescription>
-              Defina o seu cargo para personalizar as permissões de acesso ao
-              sistema futuramente.
+              Defina o seu cargo administrativo e indique se atende clientes na barbearia.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-6">
+            
+            {/* Bloco 1: Nível de Acesso */}
             <div className="max-w-md space-y-2">
-              <Label htmlFor="cargo">Cargo</Label>
+              <Label htmlFor="cargo">Nível de Acesso ao Sistema</Label>
               <Select value={cargo} onValueChange={setCargo}>
                 <SelectTrigger className="focus:ring-zinc-900 bg-zinc-50">
                   <SelectValue placeholder="Selecione o seu cargo" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="owner">Proprietário / Dono</SelectItem>
-                  <SelectItem value="manager">Gerente</SelectItem>
-                  <SelectItem value="barber">Barbeiro Profissional</SelectItem>
-                  <SelectItem value="attendant">Recepcionista</SelectItem>
+                  <SelectItem value="owner">Proprietário (Acesso Total)</SelectItem>
+                  <SelectItem value="manager">Gerente (Gestão e Agendamentos)</SelectItem>
+                  <SelectItem value="receptionist">Recepcionista (Fila e PDV)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Bloco 2: Toggle Atendimento Operacional */}
+            <div className="flex flex-row items-center justify-between rounded-lg border border-zinc-200 p-4 bg-zinc-50 max-w-md">
+              <div className="space-y-0.5">
+                <Label className="text-base flex items-center gap-2 cursor-pointer" onClick={() => setIsBarber(!isBarber)}>
+                  <Scissors className="size-4 text-zinc-700" /> Realiza atendimentos?
+                </Label>
+                <p className="text-[13px] text-zinc-500 leading-snug">
+                  Ative para que os clientes possam escolher você na fila virtual e na agenda.
+                </p>
+              </div>
+              <Switch
+                checked={isBarber}
+                onCheckedChange={setIsBarber}
+              />
+            </div>
+
           </CardContent>
         </Card>
 
