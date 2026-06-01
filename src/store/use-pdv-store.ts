@@ -24,13 +24,15 @@ interface PDVState {
   isSaleActive: boolean;
   items: PDVItem[];
   client: SelectedClient | null;
+  currentBarberId: string | null; // <-- NOVO: Memória de quem é o barbeiro da sessão atual
   
-  startSale: (client?: SelectedClient | null) => void;
+  startSale: (client?: SelectedClient | null, barberId?: string | null) => void;
   cancelSale: () => void;
   
   addItem: (item: Omit<PDVItem, 'quantity'>) => void;
   removeItem: (id: string) => void;
   updateQuantity: (id: string, quantity: number) => void;
+  updateItemBarber: (id: string, newBarberId: string | null) => void; // <-- NOVO: Altera o dono da comissão de um item
   clearCart: () => void;
   getCartTotal: () => number;
 }
@@ -39,24 +41,39 @@ export const usePDVStore = create<PDVState>((set, get) => ({
   isSaleActive: false,
   items: [],
   client: null,
+  currentBarberId: null,
   
-  startSale: (client = null) => set({ isSaleActive: true, client, items: [] }),
-  cancelSale: () => set({ isSaleActive: false, client: null, items: [] }),
+  startSale: (client = null, barberId = null) => set({ isSaleActive: true, client, items: [], currentBarberId: barberId }),
+  cancelSale: () => set({ isSaleActive: false, client: null, items: [], currentBarberId: null }),
 
   addItem: (newItem) => set((state) => {
-    // Compara pelo ID e também pelo barberId, para não misturar serviços de barbeiros diferentes no mesmo item
-    const existingItem = state.items.find(i => i.id === newItem.id && i.barberId === newItem.barberId);
+    // REGRA DE NEGÓCIO BLINDADA:
+    // 1. Se já vier um barberId explícito (ex: da Agenda), respeita.
+    // 2. Se for PRODUTO, entra como null (sem comissão), a menos que forçado.
+    // 3. Se for SERVIÇO e não tiver dono, usa o barbeiro da sessão como "sugestão".
+    let finalBarberId = newItem.barberId;
     
-    if (existingItem) {
-      return { 
-        items: state.items.map(i => 
-          (i.id === newItem.id && i.barberId === newItem.barberId) 
-            ? { ...i, quantity: i.quantity + 1 } 
-            : i
-        ) 
-      };
+    if (finalBarberId === undefined) {
+      if (newItem.type === 'product') {
+        finalBarberId = null; 
+      } else if (newItem.type === 'service') {
+        finalBarberId = state.currentBarberId;
+      }
     }
-    return { items: [...state.items, { ...newItem, quantity: 1 }] };
+
+    const itemToMatch = { ...newItem, barberId: finalBarberId };
+
+    // Compara pelo ID e também pelo barberId, para não misturar serviços de barbeiros diferentes no mesmo item
+    const existingItemIndex = state.items.findIndex(
+      i => i.id === itemToMatch.id && i.barberId === itemToMatch.barberId
+    );
+    
+    if (existingItemIndex >= 0) {
+      const newItems = [...state.items];
+      newItems[existingItemIndex].quantity += 1;
+      return { items: newItems };
+    }
+    return { items: [...state.items, { ...itemToMatch, quantity: 1 }] };
   }),
 
   removeItem: (id) => set((state) => ({ items: state.items.filter(i => i.id !== id) })),
@@ -64,8 +81,12 @@ export const usePDVStore = create<PDVState>((set, get) => ({
   updateQuantity: (id, quantity) => set((state) => ({ 
     items: state.items.map(i => i.id === id ? { ...i, quantity: Math.max(1, quantity) } : i) 
   })),
+
+  updateItemBarber: (id, newBarberId) => set((state) => ({
+    items: state.items.map(i => i.id === id ? { ...i, barberId: newBarberId } : i)
+  })),
   
-  clearCart: () => set({ items: [], client: null, isSaleActive: false }),
+  clearCart: () => set({ items: [], client: null, isSaleActive: false, currentBarberId: null }),
   
   getCartTotal: () => get().items.reduce((total, item) => total + (item.displayPrice * item.quantity), 0)
 }));

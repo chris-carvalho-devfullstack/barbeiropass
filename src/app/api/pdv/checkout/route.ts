@@ -10,6 +10,7 @@ const checkoutSchema = z.object({
   cashRegisterId: z.string().uuid("Caixa inválido"),
   paymentMethod: z.enum(["pix", "credit_card", "debit_card", "cash"]),
   clientId: z.string().uuid().optional().nullable(),
+  customerName: z.string().optional().nullable(), // <-- ADICIONADO: Nome do cliente em texto puro
   
   // NOVOS CAMPOS: Elo de Ligação com Fila/Agenda
   sourceId: z.string().uuid().optional().nullable(), // ID da fila ou do agendamento
@@ -69,21 +70,36 @@ export async function POST(req: Request) {
         });
 
       } else if (item.type === "service") {
-        const { data: service, error: sError } = await supabase.from("services").select("price, name").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        // CORREÇÃO: Buscamos também a comissão padrão do serviço na tabela services
+        const { data: service, error: sError } = await supabase.from("services")
+          .select("price, name, commission_percentage")
+          .eq("id", item.id)
+          .eq("barbershop_id", member.barbershop_id)
+          .single();
+          
         if (sError || !service) return NextResponse.json({ error: `Serviço inválido: ${item.id}` }, { status: 400 });
         
         unitPrice = service.price;
+        
+        // Pega a comissão padrão cadastrada no serviço (se houver)
+        let finalCommissionPercentage = service.commission_percentage || 0;
 
         // CALCULAR COMISSÃO SE HOUVER UM BARBEIRO ATRIBUÍDO
         if (item.barberId) {
+          // CORREÇÃO: Tenta sobrescrever caso haja uma comissão específica para este barbeiro
+          // Usamos maybeSingle() para evitar erro caso não exista uma regra específica
           const { data: comm } = await supabase.from("staff_service_commissions")
             .select("commission_percentage")
             .eq("staff_id", item.barberId)
             .eq("service_id", item.id)
-            .single();
+            .maybeSingle();
 
           if (comm && comm.commission_percentage > 0) {
-            commissionAmount = (unitPrice * item.quantity) * (Number(comm.commission_percentage) / 100);
+            finalCommissionPercentage = Number(comm.commission_percentage);
+          }
+
+          if (finalCommissionPercentage > 0) {
+            commissionAmount = (unitPrice * item.quantity) * (finalCommissionPercentage / 100);
             
             // Lançamento para o Ledger Financeiro
             ledgersToInsert.push({
@@ -107,12 +123,15 @@ export async function POST(req: Request) {
       realTotalAmount += (unitPrice * item.quantity);
     }
 
-    // 1. Criar a Ordem de Venda (POS Order)
+    // 1. Criar a Ordem de Venda (POS Order) BLINDADA COM NOME E ORIGEM
     const { data: order, error: orderError } = await supabase.from("pos_orders").insert({
       barbershop_id: member.barbershop_id, 
       // TRUQUE PARA NÃO QUEBRAR: Se vier o ID fake de caixa livre, transforma em nulo
       cash_register_id: parsed.data.cashRegisterId === "00000000-0000-0000-0000-000000000000" ? null : parsed.data.cashRegisterId, 
       customer_id: parsed.data.clientId || null,
+      customer_name: parsed.data.customerName || "Cliente Avulso", // <-- ADICIONADO
+      source_id: parsed.data.sourceId || null,                     // <-- ADICIONADO
+      source_type: parsed.data.sourceType || null,                 // <-- ADICIONADO
       total_amount: realTotalAmount, 
       payment_method: parsed.data.paymentMethod
     }).select("id").single();

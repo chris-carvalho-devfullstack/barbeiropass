@@ -59,6 +59,38 @@ interface LedgerEntry {
   description: string | null;
 }
 
+// Histórico Híbrido Unificado (Fila + Agenda + PDV)
+interface UnifiedHistoryEntry {
+  id: string;
+  date: string;
+  client_name: string;
+  service_name: string;
+  price: number | null;
+  is_paid: boolean;
+  source_type: "Fila Virtual" | "Agenda" | "Caixa (PDV)";
+}
+
+// ATUALIZADO: Agora reflete as novas colunas da arquitetura robusta
+interface PosItemData {
+  id: string;
+  unit_price: number;
+  services: { name: string } | null;
+  pos_orders: { created_at: string; customer_name: string | null; source_type: string | null } | null;
+}
+
+interface PendingApptData {
+  id: string;
+  scheduled_at: string;
+  client_name: string | null;
+  services: { name: string; price: number } | null;
+}
+
+interface PendingQueueData {
+  id: string;
+  joined_at: string;
+  client_name: string | null;
+}
+
 interface PageProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }
@@ -75,7 +107,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   const resolvedParams = await searchParams;
   const targetStaffId = resolvedParams.id as string | undefined;
 
-  // 1. Verificação de Identidade na Edge
+  // 1. Verificação de Identidade
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) {
     redirect("/login");
@@ -95,7 +127,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
     redirect("/equipe/staff");
   }
 
-  // 3. Query buscando os dados
+  // 3. Query buscando os dados do Profissional
   let staffQuery = supabase.from("staff").select(`
     id,
     full_name,
@@ -146,27 +178,99 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
 
   const isAdminOnly = (staffData.role === "owner" || staffData.role === "manager") && !staffWorkStation && staffCommissions.length === 0;
 
-  // Lógica da Comissão Uniforme
   const isUniformCommission = staffCommissions.length > 0 && staffCommissions.every(c => Number(c.commission_percentage) === Number(staffCommissions[0].commission_percentage));
   const uniformPercentageValue = isUniformCommission ? Number(staffCommissions[0].commission_percentage) : null;
 
-  // Tipagem inicializada com Array vazio
+  // Variáveis para as abas
   let agendamentosAAtender: AppointmentData[] = [];
-  let historicoAtendidos: AppointmentData[] = [];
+  let historicoAtendidos: UnifiedHistoryEntry[] = [];
   let financialLedger: LedgerEntry[] = [];
   let totalGanho = 0;
 
   if (!isReceptionist && !isAdminOnly) {
+    // =========================================================================
+    // A. APENAS AGENDAMENTOS FUTUROS (Aba Agenda)
+    // =========================================================================
     const { data: appointmentsRaw } = await supabase
       .from("appointments")
       .select("id, scheduled_at, status, client_name, services (name, price)")
-      .eq("barber_id", staffData.id)
+      .or(`barber_id.eq.${staffData.id},barber_id.eq.${staffData.profile_id}`)
+      .in("status", ["scheduled", "confirmed"])
       .order("scheduled_at", { ascending: true });
 
-    const allAppointments = (appointmentsRaw as unknown as AppointmentData[]) || [];
-    agendamentosAAtender = allAppointments.filter(ap => ap.status === "scheduled" || ap.status === "confirmed");
-    historicoAtendidos = allAppointments.filter(ap => ap.status === "completed");
+    agendamentosAAtender = (appointmentsRaw as unknown as AppointmentData[]) || [];
 
+    // =========================================================================
+    // B. HISTÓRICO HÍBRIDO (PAGOS VIA PDV + PENDENTES NA CADEIRA)
+    // =========================================================================
+    
+    // B1. ITENS PAGOS - Consulta blindada direto do PDV (ARQUITETURA ENTERPRISE)
+    // Sem necessidade de mapear clientes ou perfis, pois o nome e origem já estão na pos_orders
+    const { data: posItemsRaw } = await supabase
+      .from("pos_order_items")
+      .select(`
+        id,
+        unit_price,
+        services ( name ),
+        pos_orders ( created_at, customer_name, source_type )
+      `)
+      .eq("barber_id", staffData.id)
+      .eq("item_type", "service");
+
+    const posItems = (posItemsRaw as unknown as PosItemData[]) || [];
+
+    const paidHistory: UnifiedHistoryEntry[] = posItems.map(item => ({
+      id: item.id,
+      date: item.pos_orders?.created_at || new Date().toISOString(),
+      client_name: item.pos_orders?.customer_name || "Cliente Avulso",
+      service_name: item.services?.name || "Serviço Avulso",
+      price: Number(item.unit_price) || 0,
+      is_paid: true,
+      source_type: item.pos_orders?.source_type === 'queue' ? "Fila Virtual" : item.pos_orders?.source_type === 'appointment' ? "Agenda" : "Caixa (PDV)"
+    }));
+
+    // B2. ITENS PENDENTES - Agenda
+    const { data: pendingApptsRaw } = await supabase
+      .from("appointments")
+      .select("id, scheduled_at, client_name, services (name, price)")
+      .or(`barber_id.eq.${staffData.id},barber_id.eq.${staffData.profile_id}`)
+      .in("status", ["awaiting_payment", "finished"]);
+
+    const pendingApptHistory: UnifiedHistoryEntry[] = ((pendingApptsRaw as unknown as PendingApptData[]) || []).map(a => ({
+      id: a.id,
+      date: a.scheduled_at,
+      client_name: a.client_name || "Cliente Avulso",
+      service_name: a.services?.name || "Serviço de Agenda",
+      price: a.services?.price ? Number(a.services.price) : null,
+      is_paid: false,
+      source_type: "Agenda"
+    }));
+
+    // B3. ITENS PENDENTES - Fila Virtual
+    const { data: pendingQueueRaw } = await supabase
+      .from("virtual_queue")
+      .select("id, joined_at, client_name")
+      .or(`barber_id.eq.${staffData.id},barber_id.eq.${staffData.profile_id}`)
+      .in("status", ["awaiting_payment", "finished"]);
+
+    const pendingQueueHistory: UnifiedHistoryEntry[] = ((pendingQueueRaw as unknown as PendingQueueData[]) || []).map(q => ({
+      id: q.id,
+      date: q.joined_at,
+      client_name: q.client_name || "Cliente da Fila",
+      service_name: "Atendimento da Fila",
+      price: null,
+      is_paid: false,
+      source_type: "Fila Virtual"
+    }));
+
+    // Mescla todas as fontes e ordena por data
+    historicoAtendidos = [...paidHistory, ...pendingApptHistory, ...pendingQueueHistory].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+
+    // =========================================================================
+    // C. EXTRATO FINANCEIRO (Aba Relatórios)
+    // =========================================================================
     const { data: ledgerEntriesRaw } = await supabase
       .from("staff_financial_ledgers")
       .select("*")
@@ -175,7 +279,6 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
 
     financialLedger = (ledgerEntriesRaw as unknown as LedgerEntry[]) || [];
     
-    // Cálculo removido o totalTaxas pois não é mais usado
     totalGanho = financialLedger
       .filter(item => item.transaction_type === "commission_earned")
       .reduce((acc, curr) => acc + Number(curr.amount), 0);
@@ -355,7 +458,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
             </Card>
           </div>
 
-          <Tabs defaultValue="agenda" className="space-y-4 w-full">
+          <Tabs defaultValue="historico" className="space-y-4 w-full">
             <TabsList className="grid grid-cols-3 w-full max-w-md bg-muted/80 p-1 rounded-xl">
               <TabsTrigger value="agenda" className="rounded-lg gap-2 text-xs sm:text-sm">
                 <Calendar className="h-4 w-4 hidden sm:inline" /> Agenda
@@ -429,50 +532,61 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
             <TabsContent value="historico" className="space-y-4">
               <Card className="border-none shadow-sm bg-background">
                 <CardHeader className="px-4 sm:px-6">
-                  <CardTitle className="text-base sm:text-lg">Atendimentos Efetuados</CardTitle>
-                  <CardDescription>Ordens de serviço concluídas no sistema.</CardDescription>
+                  <CardTitle className="text-base sm:text-lg">Atendimentos e Vendas</CardTitle>
+                  <CardDescription>Acompanhe tudo que você realizou e se os clientes já pagaram no caixa.</CardDescription>
                 </CardHeader>
                 <CardContent className="overflow-x-auto p-0 sm:p-6 sm:pt-0">
                   <Table>
                     <TableHeader className="bg-muted/40 sm:bg-transparent">
                       <TableRow>
                         <TableHead>Data</TableHead>
+                        <TableHead>Origem</TableHead>
                         <TableHead>Cliente</TableHead>
                         <TableHead>Serviço</TableHead>
-                        <TableHead>Estado</TableHead>
-                        <TableHead className="text-right">Valor Bruto</TableHead>
+                        <TableHead className="text-right">Valor</TableHead>
+                        <TableHead className="text-right">Situação Caixa</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {historicoAtendidos.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="text-center py-8 text-muted-foreground text-sm italic">
+                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm italic">
                             Nenhum registo histórico encontrado.
                           </TableCell>
                         </TableRow>
                       ) : (
-                        historicoAtendidos.map((ap) => {
-                          const serviceInfo = ap.services;
-                          const scheduledDate = new Date(ap.scheduled_at);
+                        historicoAtendidos.map((item) => {
+                          const scheduledDate = new Date(item.date);
                           const timeString = scheduledDate.toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' });
                           const dateString = scheduledDate.toLocaleDateString("pt-BR");
 
                           return (
-                            <TableRow key={ap.id} className="hover:bg-muted/20">
+                            <TableRow key={item.id} className="hover:bg-muted/20">
                               <TableCell className="text-sm">
                                 {dateString} - {timeString}
                               </TableCell>
-                              <TableCell className="font-medium text-sm">{ap.client_name || "---"}</TableCell>
-                              <TableCell className="font-medium">
-                                {serviceInfo?.name || "Concluído"}
-                              </TableCell>
                               <TableCell>
-                                <div className="flex items-center gap-1 text-emerald-600 font-medium text-xs">
-                                  <CheckCircle2 className="h-3.5 w-3.5" /> Finalizado
-                                </div>
+                                <Badge variant="outline" className="text-[10px] uppercase tracking-wider font-bold">
+                                  {item.source_type}
+                                </Badge>
                               </TableCell>
-                              <TableCell className="text-right font-medium">
-                                R$ {Number(serviceInfo?.price || 0).toFixed(2)}
+                              <TableCell className="font-bold text-sm text-slate-700">{item.client_name}</TableCell>
+                              <TableCell className="font-medium text-sm text-slate-500">
+                                {item.service_name}
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-slate-400">
+                                {item.price !== null ? `R$ ${item.price.toFixed(2)}` : <span className="text-xs">---</span>}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {item.is_paid ? (
+                                  <div className="inline-flex items-center gap-1.5 text-emerald-600 font-bold text-xs bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200/50 shadow-sm">
+                                    <CheckCircle2 className="h-3.5 w-3.5" /> Pago
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1.5 text-amber-600 font-bold text-xs bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200/50 shadow-sm">
+                                    <Clock className="h-3.5 w-3.5" /> Pendente
+                                  </div>
+                                )}
                               </TableCell>
                             </TableRow>
                           );
