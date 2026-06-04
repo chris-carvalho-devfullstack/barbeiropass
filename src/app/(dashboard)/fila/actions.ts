@@ -36,7 +36,12 @@ export async function joinQueueAction(data: {
 }
 
 // 2. Atualizar Status (Para uso interno da Barbearia - ZERO TRUST)
-export async function updateQueueStatusAction(id: string, status: string, barberId?: string) {
+export async function updateQueueStatusAction(
+  id: string, 
+  status: string, 
+  barberId?: string,
+  serviceIds?: string[] // ATUALIZADO: Agora recebe um Array de IDs de serviços
+) {
   const supabase = await createClient();
   
   // ==========================================
@@ -52,9 +57,15 @@ export async function updateQueueStatusAction(id: string, status: string, barber
     barber_id?: string | null;
     barber_name?: string | null;
     chair_number?: string | null;
+    service_ids?: string[] | null; // ATUALIZADO: Tipagem para suportar o array
   };
 
   const updateData: QueueUpdatePayload = { status };
+
+  // ATUALIZADO: Se o barbeiro indicou serviços ao finalizar, nós salvamos na fila
+  if (serviceIds && serviceIds.length > 0) {
+    updateData.service_ids = serviceIds;
+  }
 
   if (status === "serving" || status === "in_progress") {
     let finalBarberId = barberId;

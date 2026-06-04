@@ -1,6 +1,7 @@
+// src/app/(dashboard)/layout.tsx
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
-import { UserNav } from "@/components/user-nav"; // Importação do nosso novo componente Premium
+import { UserNav } from "@/components/user-nav";
 
 export default function DashboardLayout({
   children,
@@ -9,31 +10,40 @@ export default function DashboardLayout({
 }) {
   return (
     <SidebarProvider>
-      <div className="flex min-h-screen w-full bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
-        {/* A Barra Lateral do Shadcn */}
+      {/* Estrutura de "App Shell":
+        1. Flex h-screen: A tela ocupa 100% da altura da janela.
+        2. overflow-hidden: Impede que a página inteira tenha scroll. 
+           O scroll acontecerá apenas dentro do container de conteúdo.
+      */}
+      <div className="flex h-screen w-full bg-slate-50 dark:bg-zinc-950 overflow-hidden">
+        
+        {/* A Barra Lateral é gerenciada pelo SidebarProvider */}
         <AppSidebar />
         
-        {/* O Conteúdo Principal */}
-        <main className="flex-1 flex flex-col w-full overflow-hidden">
-          {/* CORREÇÃO AQUI: 
-            Trocamos 'px-6' por 'pr-6 pl-4' (ou 'pl-3') para encostar o botão 
-            mais na borda e alinhar perfeitamente com a linha do menu.
+        {/* Container Principal */}
+        <div className="flex flex-1 flex-col h-full overflow-hidden">
+          
+          {/* HEADER FIXO (Sticky) 
+             z-40: Garante que ele fique acima dos cards ou menus da página.
+             backdrop-blur-md: O efeito "premium" de vidro fosco.
           */}
-          <header className="flex h-16 shrink-0 items-center gap-4 border-b border-zinc-200 dark:border-zinc-800 pr-6 pl-4 bg-white dark:bg-zinc-900 sticky top-0 z-10">
+          <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-4 border-b border-slate-200 dark:border-zinc-800 px-4 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md shadow-sm">
             <SidebarTrigger className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors" />
             
-            {/* O flex-1 empurra o que vem depois dele para o extremo direito */}
             <div className="flex-1" />
             
-            {/* Renderizando o nosso avatar e menu de usuário no canto direito */}
             <UserNav />
           </header>
           
-          {/* A Página em si vai renderizar aqui dentro */}
-          <div className="flex-1 p-6 overflow-auto">
+          {/* CONTEÚDO (Scroll Interno)
+             flex-1: Ocupa todo o resto da tela.
+             overflow-y-auto: Cria o scroll apenas aqui dentro.
+          */}
+          <main className="flex-1 overflow-y-auto custom-scrollbar">
             {children}
-          </div>
-        </main>
+          </main>
+          
+        </div>
       </div>
     </SidebarProvider>
   );

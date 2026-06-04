@@ -1,7 +1,14 @@
+// src/app/api/pdv/pending-clients/route.ts
 export const runtime = "edge";
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+
+export interface PendingService {
+  id: string;
+  name: string;
+  price: number;
+}
 
 // Tipagem segura para a resposta unificada da API
 export interface PendingClientResponse {
@@ -12,9 +19,7 @@ export interface PendingClientResponse {
   barberName: string | null;
   origin: "queue" | "appointment";
   time: string;
-  serviceId?: string | null;
-  serviceName?: string | null;
-  servicePrice?: number | null;
+  services: PendingService[]; // Suporta múltiplos serviços
 }
 
 export async function GET() {
@@ -48,7 +53,8 @@ export async function GET() {
         client_id,
         barber_id,
         barber_name,
-        joined_at
+        joined_at,
+        service_ids
       `)
       .eq("barbershop_id", barbershopId)
       .eq("status", "awaiting_payment");
@@ -58,8 +64,24 @@ export async function GET() {
       return NextResponse.json({ error: "Erro ao buscar clientes da fila." }, { status: 500 });
     }
 
-    // 3. BUSCA NOS AGENDAMENTOS (Clientes da agenda que concluíram o horário e aguardam pagamento)
-    // Fazemos um JOIN com 'services' e 'staff' para trazer o carrinho pré-montado
+    // 2.1 Extrai e busca os detalhes de todos os serviços únicos da Fila
+    const allServiceIds = [...new Set((queueData || []).flatMap(q => q.service_ids || []))];
+    
+    // Tipagem explícita com a interface PendingService
+    let servicesData: PendingService[] = [];
+
+    if (allServiceIds.length > 0) {
+      const { data: sData, error: sError } = await supabase
+        .from("services")
+        .select("id, name, price")
+        .in("id", allServiceIds);
+        
+      if (!sError && sData) {
+        servicesData = sData as PendingService[];
+      }
+    }
+
+    // 3. BUSCA NOS AGENDAMENTOS
     const { data: appointmentsData, error: appointmentsError } = await supabase
       .from("appointments")
       .select(`
@@ -69,7 +91,7 @@ export async function GET() {
         barber_id,
         scheduled_at,
         service_id,
-        services ( name, price ),
+        services ( id, name, price ),
         staff ( full_name )
       `)
       .eq("barbershop_id", barbershopId)
@@ -81,20 +103,39 @@ export async function GET() {
     }
 
     // 4. PADRONIZAÇÃO E UNIÃO DOS DADOS (Data Mapping)
-    const pendingQueue: PendingClientResponse[] = queueData.map((q) => ({
-      id: q.id,
-      clientName: q.client_name,
-      clientId: q.client_id,
-      barberId: q.barber_id,
-      barberName: q.barber_name,
-      origin: "queue",
-      time: q.joined_at,
-    }));
+    const pendingQueue: PendingClientResponse[] = (queueData || []).map((q) => {
+      
+      // SOLUÇÃO DO ERRO: Tipagem super estrita para o parâmetro 's'
+      const clientServices = (q.service_ids || [])
+        .map((id: string) => servicesData.find((s: PendingService) => s.id === id))
+        .filter((s: PendingService | undefined): s is PendingService => s !== undefined)
+        .map((s: PendingService) => ({
+          id: s.id,
+          name: s.name,
+          price: Number(s.price)
+        }));
 
-    const pendingAppointments: PendingClientResponse[] = appointmentsData.map((a) => {
-      // Tratamento seguro de joins tipados dinamicamente pelo Supabase
-      const serviceInfo = a.services as unknown as { name: string; price: number } | null;
+      return {
+        id: q.id,
+        clientName: q.client_name,
+        clientId: q.client_id,
+        barberId: q.barber_id,
+        barberName: q.barber_name,
+        origin: "queue",
+        time: q.joined_at,
+        services: clientServices
+      };
+    });
+
+    const pendingAppointments: PendingClientResponse[] = (appointmentsData || []).map((a) => {
+      const serviceInfo = a.services as unknown as { id: string; name: string; price: number } | null;
       const staffInfo = a.staff as unknown as { full_name: string } | null;
+
+      const clientServices = serviceInfo ? [{
+        id: serviceInfo.id,
+        name: serviceInfo.name,
+        price: Number(serviceInfo.price)
+      }] : [];
 
       return {
         id: a.id,
@@ -104,9 +145,7 @@ export async function GET() {
         barberName: staffInfo ? staffInfo.full_name : null,
         origin: "appointment",
         time: a.scheduled_at,
-        serviceId: a.service_id,
-        serviceName: serviceInfo ? serviceInfo.name : null,
-        servicePrice: serviceInfo ? Number(serviceInfo.price) : null,
+        services: clientServices
       };
     });
 

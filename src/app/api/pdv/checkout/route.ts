@@ -105,7 +105,8 @@ export async function POST(req: Request) {
             ledgersToInsert.push({
               barbershop_id: member.barbershop_id,
               staff_id: item.barberId,
-              appointment_id: parsed.data.sourceType === "appointment" ? parsed.data.sourceId : null,
+              source_id: parsed.data.sourceId, // ID da Fila ou da Agenda
+              source_type: parsed.data.sourceType, // "queue" ou "appointment"
               transaction_type: "commission_earned",
               amount: commissionAmount,
               description: `Comissão - ${service.name}`
