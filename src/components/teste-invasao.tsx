@@ -1,47 +1,45 @@
-// src/components/teste-invasao.tsx
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
-import { toast } from "sonner";
-import { ShieldAlert } from "lucide-react";
 
 export function BotaoTesteInvasao() {
-  const handleTest = async () => {
+  const simularAtaque = async () => {
     const supabase = createClient();
     
-    // Simula um hacker que copiou o ID da barbearia do concorrente (um ID falso/aleatório aqui)
-    const idBarbeariaAlvo = "818a6b6a-d779-4d48-b6fa-83eefb2b6f69";
+    // Pegando o usuário atual logado (o atacante)
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    console.log("🚨 Tentando invadir o banco...");
+    console.log("Seu UID é:", user?.id);
+    
+    // Substitua este UUID pelo ID de alguma barbearia real que exista no seu banco (que não seja a sua)
+    // Se não tiver outra, pode usar o ID da sua própria barbearia só para ver o banco rejeitar o INSERT.
+    const TARGET_BARBERSHOP_ID = '00000000-0000-0000-0000-000000000000'; 
 
-    toast.loading("Tentando invadir a barbearia do concorrente...", { id: "teste-invasao" });
-
-    // Tenta fazer o upload na pasta que NÃO pertence ao usuário logado
-    const { data, error } = await supabase.storage
-      .from('barbershop-media')
-      .upload(`${idBarbeariaAlvo}/hacked.png`, "Este é um arquivo falso");
+    const { data, error } = await supabase.from('barbershop_members').insert({
+      barbershop_id: TARGET_BARBERSHOP_ID,
+      profile_id: user?.id,
+      role: 'owner'
+    });
 
     if (error) {
-      console.log("✅ ERRO ESPERADO (BLINDAGEM ATIVA):", error);
-      toast.success("🛡️ BLINDAGEM FUNCIONOU! Acesso bloqueado.", {
-        id: "teste-invasao",
-        description: error.message,
-        duration: 8000,
-      });
+      console.error("✅ ATAQUE BLOQUEADO COM SUCESSO PELO RLS!", error.message);
+      alert(`Acesso Negado! O RLS bloqueou a injeção.\nMotivo: ${error.message}`);
     } else {
-      console.error("🚨 FALHA DE SEGURANÇA:", data);
-      toast.error("🚨 ALERTA: O arquivo foi enviado! RLS falhou.", {
-        id: "teste-invasao",
-        duration: 8000,
-      });
+      console.error("❌ FALHA DE SEGURANÇA: O ataque funcionou!", data);
+      alert("Falha Crítica! O banco aceitou o registro.");
     }
   };
 
   return (
-    <button
-      onClick={handleTest}
-      className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-5 rounded-lg shadow-lg transition-all mb-8"
-    >
-      <ShieldAlert size={20} />
-      Testar Invasão Lateral (Hacker Logado)
-    </button>
+    <div className="p-4 border-2 border-red-500 bg-red-50 rounded-lg mb-8">
+      <h3 className="font-bold text-red-700 mb-2">Painel de Teste de Segurança</h3>
+      <button 
+        onClick={simularAtaque} 
+        className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 font-bold rounded shadow-lg"
+      >
+        SIMULAR ATAQUE DE INJEÇÃO (MEMBER)
+      </button>
+    </div>
   );
 }

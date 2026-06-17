@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { maskPhone } from "@/utils/validations"; 
 import { Loader2, Upload, Camera, Check, Phone } from "lucide-react";
 import Image from "next/image";
 
@@ -291,7 +292,15 @@ export default function AparenciaPage() {
                     <Label htmlFor="phone" className="flex items-center gap-2 text-zinc-600">
                       <Phone size={14} /> WhatsApp de Contato
                     </Label>
-                    <Input id="phone" name="phone" defaultValue={barbershop.phone || ""} placeholder="(00) 00000-0000" className="focus:ring-zinc-900" />
+                    <Input 
+                      id="phone" 
+                      name="phone" 
+                      defaultValue={barbershop.phone || ""} 
+                      placeholder="(00) 00000-0000" 
+                      // 👇 ADICIONE O EVENTO ONCHANGE AQUI
+                      onChange={(e) => { e.target.value = maskPhone(e.target.value); }}
+                      className="focus:ring-zinc-900" 
+                    />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="instagram" className="flex items-center gap-2 text-zinc-600">

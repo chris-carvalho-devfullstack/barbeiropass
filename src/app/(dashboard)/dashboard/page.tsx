@@ -5,7 +5,7 @@ import { Scissors, Users, Calendar, DollarSign } from "lucide-react";
 import { OnboardingProgress } from "@/components/onboarding-progress";
 import { OnboardingCelebration } from "@/components/onboarding-celebration";
 import { OnboardingSuccessBanner } from "@/components/onboarding-success-banner"; // <-- NOVO IMPORT
-import { BotaoTesteInvasao } from "@/components/teste-invasao";
+
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
@@ -88,8 +88,7 @@ export default async function DashboardPage() {
           Bem-vindo ao painel de controle da <strong className="text-indigo-600">{barbershopName}</strong>.
         </p>
       </div>
-
-     
+ 
 
       {/* Se o score é menor que 100, exibe tarefas. Se é 100, exibe o banner dispensável */}
       {score < 100 ? (

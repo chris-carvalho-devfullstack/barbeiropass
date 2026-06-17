@@ -21,6 +21,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 
 import { createClient } from "@/utils/supabase/client";
 
+
 // =========================================================================
 // TIPAGENS DE ESTRUTURA E APIs
 // =========================================================================
@@ -65,6 +66,7 @@ type StaffMember = {
 };
 
 export default function PDVPage() {
+  
   // =========================================================================
   // ESTADOS GLOBAIS (ZUSTAND) E LOCAIS
   // =========================================================================
@@ -210,7 +212,7 @@ export default function PDVPage() {
     if (servicesToImport && servicesToImport.length > 0) {
       servicesToImport.forEach(svc => {
         const newItem = { 
-          id: crypto.randomUUID(),
+          id: svc.id, // <--- CORREÇÃO: Usar o ID real que veio do banco de dados!
           code: "ATENDIMENTO", 
           name: svc.name, 
           type: "service" as const, 

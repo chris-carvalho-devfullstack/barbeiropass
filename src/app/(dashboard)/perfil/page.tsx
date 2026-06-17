@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { maskPhone } from "@/utils/validations"; // <-- ADICIONE ESTA LINHA
 import {
   Card,
   CardContent,
@@ -298,7 +299,7 @@ export default function PerfilPage() {
                   id="telefone"
                   placeholder="(00) 00000-0000"
                   value={telefone}
-                  onChange={(e) => setTelefone(e.target.value)}
+                  onChange={(e) => setTelefone(maskPhone(e.target.value))} 
                   className="focus-visible:ring-zinc-900 bg-zinc-50"
                 />
               </div>

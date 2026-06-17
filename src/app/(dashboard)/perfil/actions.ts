@@ -8,20 +8,20 @@ import { z } from "zod";
 // BLINDAGEM ZERO TRUST: SCHEMAS DE VALIDAÇÃO NO BACKEND
 // ============================================================================
 
+// Validação customizada para telefones (Remove a máscara e checa o tamanho)
+const phoneValidation = z.string().optional().refine((val) => {
+  if (!val) return true; // Permite vazio
+  const cleanPhone = val.replace(/\D/g, "");
+  return cleanPhone.length === 0 || cleanPhone.length === 10 || cleanPhone.length === 11;
+}, "Número de telefone deve conter DDD + Número (10 ou 11 dígitos).");
+
 const locationSchema = z.object({
   zip_code: z.any().transform(val => String(val || "").replace(/\D/g, "")).refine(val => val.length === 8, "CEP deve conter exatamente 8 dígitos"),
-  
   street: z.any().transform(val => String(val || "").trim()).refine(val => val.length >= 2, "Rua inválida"),
-  
   number: z.any().transform(val => String(val || "").trim()).refine(val => val.length > 0, "Número obrigatório"),
-  
   district: z.any().transform(val => String(val || "").trim()).refine(val => val.length >= 2, "Bairro inválido"),
-  
   city: z.any().transform(val => String(val || "").trim()).refine(val => val.length >= 2, "Cidade inválida"),
-  
-  // Agora validamos com rigor: deve ser uma sigla de estado válida com exatamente 2 letras (ex: SP, RJ, MG)
   state: z.any().transform(val => String(val || "").toUpperCase().trim()).refine(val => val.length === 2, "Estado (UF) deve conter exatamente 2 letras"),
-  
   complement: z.any().transform(val => val ? String(val).trim() : ""),
 });
 
@@ -36,7 +36,7 @@ const businessHourSchema = z.array(
 
 const appearanceSchema = z.object({
   description: z.string().max(1000, "A descrição é muito longa").optional(),
-  phone: z.string().optional(),
+  phone: phoneValidation, // <-- APLICANDO A VALIDAÇÃO BLINDADA
   instagram: z.string().optional(),
 });
 
@@ -57,7 +57,7 @@ const settingsSchema = z.object({
 
 const profileUpdateSchema = z.object({
   nome: z.string().min(2, "O nome deve ter pelo menos 2 caracteres"),
-  telefone: z.string().optional(),
+  telefone: phoneValidation, // <-- APLICANDO A VALIDAÇÃO BLINDADA
   cargo: z.enum(["owner", "manager", "receptionist"]),
   isBarber: z.boolean(),
 });
@@ -71,7 +71,7 @@ export type BarbershopSettingsData = z.infer<typeof settingsSchema>;
 export type ProfileUpdateData = z.infer<typeof profileUpdateSchema>;
 
 // ============================================================================
-// AUXILIAR: BUSCA BARBEARIA DO USUÁRIO
+// AUXILIAR: BUSCA BARBEARIA DO USUÁRIO E LIMPEZA DE DADOS
 // ============================================================================
 
 async function getBarbershopId(userId: string): Promise<string | null> {
@@ -84,6 +84,13 @@ async function getBarbershopId(userId: string): Promise<string | null> {
 
   if (error || !member) return null;
   return member.barbershop_id;
+}
+
+// Limpa qualquer formatação do telefone para salvar apenas números no banco
+function sanitizePhone(phone?: string): string | null {
+  if (!phone) return null;
+  const clean = phone.replace(/\D/g, "");
+  return clean.length > 0 ? clean : null;
 }
 
 // ============================================================================
@@ -131,7 +138,7 @@ export async function refreshOnboardingScore(barbershopId: string): Promise<numb
   // 5. Calcula o status com base no score
   const newStatus = score === 100 ? 'active' : 'incomplete';
 
-  // 6. Atualiza o valor final E o status no banco (CORRIGIDO)
+  // 6. Atualiza o valor final E o status no banco
   const { error: updateError } = await supabase
     .from("barbershops")
     .update({ 
@@ -175,6 +182,23 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
   const barbershopId = await getBarbershopId(user.id);
   if (!barbershopId) return { error: "Barbearia não encontrada" };
 
+  // Limpa os parênteses e traços
+  const cleanPhone = sanitizePhone(parsed.data.telefone);
+
+  // ZERO TRUST: Verifica duplicidade do telefone ignorando a própria conta
+  if (cleanPhone) {
+    const { data: existingPhone } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("phone", cleanPhone)
+      .neq("id", user.id) // Fundamental para permitir que o próprio usuário edite seus dados sem conflito
+      .maybeSingle();
+
+    if (existingPhone) {
+      return { error: "Este número de telefone já está a ser utilizado noutra conta." };
+    }
+  }
+
   // 1. CHECAGEM DE SEGURANÇA: Prevenir a perda do último proprietário
   const { data: currentMember } = await supabase
     .from("barbershop_members")
@@ -204,9 +228,8 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
 
   if (memberError) return { error: "Erro ao atualizar permissões de acesso." };
 
-  // 3. Atualizar Tabela Staff (Operacional / Atendimento) - CORREÇÃO DO ERRO 42P10
+  // 3. Atualizar Tabela Staff (Operacional / Atendimento)
   if (parsed.data.isBarber) {
-    // Verifica manualmente se o utilizador já está na tabela staff
     const { data: existingStaff } = await supabase
       .from("staff")
       .select("id")
@@ -217,7 +240,6 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
     const avatarUrl = user.user_metadata?.avatar_url || null;
 
     if (existingStaff) {
-      // Se já existe, atualiza
       const { error: updateError } = await supabase
         .from("staff")
         .update({
@@ -230,7 +252,6 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
         
       if (updateError) console.error("[SECURITY LOG] Erro ao atualizar staff:", updateError);
     } else {
-      // Se não existe, insere
       const { error: insertError } = await supabase
         .from("staff")
         .insert({
@@ -245,7 +266,6 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
       if (insertError) console.error("[SECURITY LOG] Erro ao inserir staff:", insertError);
     }
   } else {
-    // Se ele NÃO atua, desativamos (soft delete) para não perder histórico financeiro
     await supabase
       .from("staff")
       .update({ is_active: false })
@@ -253,14 +273,14 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
       .eq("profile_id", user.id);
   }
 
-  // 4. Atualizar Dados Pessoais na tabela Profiles
+  // 4. Atualizar Dados Pessoais na tabela Profiles (Salvando o telefone limpo)
   await supabase
     .from("profiles")
-    .update({ full_name: parsed.data.nome, phone: parsed.data.telefone })
+    .update({ full_name: parsed.data.nome, phone: cleanPhone })
     .eq("id", user.id);
 
   revalidatePath("/perfil");
-  revalidatePath("/equipe/staff"); // Força o painel da equipe a recarregar
+  revalidatePath("/equipe/staff"); 
   return { success: true };
 }
 
@@ -268,11 +288,9 @@ export async function updateUserProfileSettings(data: ProfileUpdateData) {
  * Atualiza a localização da barbearia
  */
 export async function updateLocation(formData: LocationFormData) {
-  // Validação Zero Trust
   const parsed = locationSchema.safeParse(formData);
   
   if (!parsed.success) {
-    // 🔍 DIAGNÓSTICO: Isso vai imprimir no terminal do seu VSCode EXATAMENTE o que falhou
     console.error("[SECURITY LOG] Bloqueio Zod Endereço:", parsed.error.flatten().fieldErrors);
     return { error: "Dados de endereço inválidos enviados ao servidor." };
   }
@@ -285,7 +303,6 @@ export async function updateLocation(formData: LocationFormData) {
   const barbershopId = await getBarbershopId(user.id);
   if (!barbershopId) return { error: "Barbearia não encontrada" };
 
-  // Tratamento do complemento nulo antes de enviar para o banco
   const safeComplement = parsed.data.complement || "";
 
   const { error: locError } = await supabase
@@ -314,7 +331,6 @@ export async function updateLocation(formData: LocationFormData) {
  * Atualiza os horários de funcionamento
  */
 export async function updateBusinessHours(hours: BusinessHourItem[]) {
-  // Validação Zero Trust
   const parsed = businessHourSchema.safeParse(hours);
   if (!parsed.success) return { error: "Formato de horários inválido enviado ao servidor." };
 
@@ -351,7 +367,6 @@ export async function updateBusinessHours(hours: BusinessHourItem[]) {
  * Atualiza aparência e contatos
  */
 export async function updateAppearance(formData: AppearanceFormData) {
-  // Validação Zero Trust
   const parsed = appearanceSchema.safeParse(formData);
   if (!parsed.success) return { error: "Dados de aparência inválidos enviados ao servidor." };
 
@@ -363,11 +378,14 @@ export async function updateAppearance(formData: AppearanceFormData) {
   const barbershopId = await getBarbershopId(user.id);
   if (!barbershopId) return { error: "Barbearia não encontrada" };
 
+  // Sanitização do telefone antes de gravar na barbearia
+  const cleanPhone = sanitizePhone(parsed.data.phone);
+
   const { error: updateError } = await supabase
     .from("barbershops")
     .update({
       description: parsed.data.description,
-      phone: parsed.data.phone,
+      phone: cleanPhone,
       instagram: parsed.data.instagram,
     })
     .eq("id", barbershopId);
@@ -385,7 +403,6 @@ export async function updateAppearance(formData: AppearanceFormData) {
  * Atualiza as configurações detalhadas da barbearia (Marketplace Premium)
  */
 export async function updateBarbershopSettings(settings: BarbershopSettingsData) {
-  // Validação Zero Trust
   const parsed = settingsSchema.safeParse(settings);
   if (!parsed.success) return { error: "Configurações inválidas enviadas ao servidor." };
 
