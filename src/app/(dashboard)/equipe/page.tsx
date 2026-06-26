@@ -89,14 +89,32 @@ export default function EquipePage() {
   const fetchStaff = useCallback(async () => {
     try {
       setLoading(true);
+
+      // 1. CORREÇÃO DE SEGURANÇA (IDOR/MULTI-TENANT): Pegar o usuário logado
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) throw new Error("Usuário não autenticado");
+
+      // 2. CORREÇÃO DE SEGURANÇA: Descobrir de qual barbearia este usuário é (Trava Multi-tenant)
+      const { data: memberData, error: memberError } = await supabase
+        .from("barbershop_members")
+        .select("barbershop_id")
+        .eq("profile_id", user.id)
+        .single();
+
+      if (memberError || !memberData) {
+        throw new Error("Você não possui vínculo com nenhuma barbearia.");
+      }
+
+      // 3. CORREÇÃO DE SEGURANÇA: Buscar ESTRITAMENTE a equipe desta barbearia com o filtro .eq()
       const { data, error } = await supabase
         .from("staff")
-        .select("id, full_name, role, unique_code, payment_model, is_active, avatar_url");
+        .select("id, full_name, role, unique_code, payment_model, is_active, avatar_url")
+        .eq("barbershop_id", memberData.barbershop_id); // <-- O FILTRO SALVADOR AQUI
 
       if (error) throw error;
       setStaff(data as StaffMember[] || []);
     } catch (error) {
-      console.error(error);
+      console.error("[FETCH_STAFF_ERROR]", error);
       toast.error("Erro ao carregar a lista da equipe.");
     } finally {
       setLoading(false);

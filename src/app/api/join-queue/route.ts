@@ -84,16 +84,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Você já está na lista de espera!" }, { status: 409 });
     }
 
-    const clientName = providedClientName || user.user_metadata?.full_name || user.email?.split("@")[0] || "Cliente";
+    // Função para abreviar o nome (Ex: Christian Carvalho -> Christian C.)
+    const formatPublicName = (fullName: string) => {
+      const parts = fullName.trim().split(" ");
+      if (parts.length > 1) {
+        return `${parts[0]} ${parts[parts.length - 1][0]}.`;
+      }
+      return parts[0];
+    };
 
-    // 6. INSERÇÃO SEGURA
+    const rawName = providedClientName || user.user_metadata?.full_name || user.email?.split("@")[0] || "Cliente";
+    const safePublicName = formatPublicName(rawName);
+
+    // 6. INSERÇÃO SEGURA (Mascarada e sem E-mail - LGPD By Design)
     const { error: insertError } = await supabase
       .from("virtual_queue")
       .insert({
         barbershop_id: barbershopId,
-        client_auth_id: user.id,
-        client_auth_email: user.email,
-        client_name: clientName,
+        client_auth_id: user.id,     // <-- A CHAVE DE RASTREIO DA BARBEARIA
+        // client_auth_email: user.email, <-- LINHA REMOVIDA PARA EVITAR VAZAMENTO (LGPD)
+        client_name: safePublicName, // <-- NOME MASCARADO (Ex: Christian C.)
         barber_id: barberId || null,
         is_authenticated: true,
         turnstile_token_used: turnstileToken,
