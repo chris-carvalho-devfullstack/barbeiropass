@@ -23,18 +23,42 @@
 # misc
 .DS_Store
 *.pem
+Thumbs.db
+Desktop.ini
 
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+logs/
+*.log
 
 # env files (can opt-in for committing if needed)
 .env*
 
 # vercel
 .vercel
+
+# cloudflare
+.wrangler/
+
+# graph analysis reports
+graphify-out/
+
+# turbopack
+.turbo/
+
+# cache
+.eslintcache
+
+# temporary files
+tmp/
+temp/
+
+# IDE
+.vscode/
+.idea/
 
 # typescript
 *.tsbuildinfo
