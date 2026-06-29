@@ -10,17 +10,16 @@ const checkoutSchema = z.object({
   cashRegisterId: z.string().uuid("Caixa inválido"),
   paymentMethod: z.enum(["pix", "credit_card", "debit_card", "cash"]),
   clientId: z.string().uuid().optional().nullable(),
-  customerName: z.string().optional().nullable(), // <-- ADICIONADO: Nome do cliente em texto puro
+  customerName: z.string().optional().nullable(),
   
-  // NOVOS CAMPOS: Elo de Ligação com Fila/Agenda
-  sourceId: z.string().uuid().optional().nullable(), // ID da fila ou do agendamento
-  sourceType: z.enum(["queue", "appointment"]).optional().nullable(), // De onde veio
+  sourceId: z.string().uuid().optional().nullable(), 
+  sourceType: z.enum(["queue", "appointment"]).optional().nullable(), 
   
   items: z.array(z.object({
     id: z.string().uuid(),
     type: z.enum(["product", "service"]),
     quantity: z.number().min(1),
-    barberId: z.string().uuid().optional().nullable() // Identificador do barbeiro
+    barberId: z.string().uuid().optional().nullable() 
   })).min(1, "O carrinho está vazio")
 });
 
@@ -51,18 +50,29 @@ export async function POST(req: Request) {
     let realTotalAmount = 0;
     const orderItemsToInsert = [];
     const ledgersToInsert = []; 
+    const stockMovementsToInsert = []; // <-- NOVO: Array para Event Sourcing de Estoque
 
     for (const item of parsed.data.items) {
       let unitPrice = 0;
       let commissionAmount = 0;
 
       if (item.type === "product") {
-        const { data: product, error: pError } = await supabase.from("products").select("price, stock_quantity").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        const { data: product, error: pError } = await supabase.from("products").select("price, stock_quantity, name").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        
         if (pError || !product) return NextResponse.json({ error: `Produto inválido: ${item.id}` }, { status: 400 });
-        if (product.stock_quantity < item.quantity) return NextResponse.json({ error: "Estoque insuficiente." }, { status: 400 });
+        if (product.stock_quantity < item.quantity) return NextResponse.json({ error: `Estoque insuficiente para o produto: ${product.name}` }, { status: 400 });
         
         unitPrice = product.price;
-        await supabase.from("products").update({ stock_quantity: product.stock_quantity - item.quantity }).eq("id", item.id);
+        
+        // NOVO PADRÃO: Delega a baixa para a tabela de movimentação e para a Trigger do banco!
+        stockMovementsToInsert.push({
+          barbershop_id: member.barbershop_id,
+          product_id: item.id,
+          type: 'SALE',
+          quantity: -item.quantity, // Negativo porque é saída
+          notes: 'Baixa automática via PDV',
+          created_by: user.id
+        });
         
         orderItemsToInsert.push({
           item_type: item.type, product_id: item.id, service_id: null,
@@ -70,7 +80,6 @@ export async function POST(req: Request) {
         });
 
       } else if (item.type === "service") {
-        // CORREÇÃO: Buscamos também a comissão padrão do serviço na tabela services
         const { data: service, error: sError } = await supabase.from("services")
           .select("price, name, commission_percentage")
           .eq("id", item.id)
@@ -80,14 +89,9 @@ export async function POST(req: Request) {
         if (sError || !service) return NextResponse.json({ error: `Serviço inválido: ${item.id}` }, { status: 400 });
         
         unitPrice = service.price;
-        
-        // Pega a comissão padrão cadastrada no serviço (se houver)
         let finalCommissionPercentage = service.commission_percentage || 0;
 
-        // CALCULAR COMISSÃO SE HOUVER UM BARBEIRO ATRIBUÍDO
         if (item.barberId) {
-          // CORREÇÃO: Tenta sobrescrever caso haja uma comissão específica para este barbeiro
-          // Usamos maybeSingle() para evitar erro caso não exista uma regra específica
           const { data: comm } = await supabase.from("staff_service_commissions")
             .select("commission_percentage")
             .eq("staff_id", item.barberId)
@@ -101,12 +105,11 @@ export async function POST(req: Request) {
           if (finalCommissionPercentage > 0) {
             commissionAmount = (unitPrice * item.quantity) * (finalCommissionPercentage / 100);
             
-            // Lançamento para o Ledger Financeiro
             ledgersToInsert.push({
               barbershop_id: member.barbershop_id,
               staff_id: item.barberId,
-              source_id: parsed.data.sourceId, // ID da Fila ou da Agenda
-              source_type: parsed.data.sourceType, // "queue" ou "appointment"
+              source_id: parsed.data.sourceId, 
+              source_type: parsed.data.sourceType, 
               transaction_type: "commission_earned",
               amount: commissionAmount,
               description: `Comissão - ${service.name}`
@@ -124,15 +127,14 @@ export async function POST(req: Request) {
       realTotalAmount += (unitPrice * item.quantity);
     }
 
-    // 1. Criar a Ordem de Venda (POS Order) BLINDADA COM NOME E ORIGEM
+    // 1. Criar a Ordem de Venda (POS Order)
     const { data: order, error: orderError } = await supabase.from("pos_orders").insert({
       barbershop_id: member.barbershop_id, 
-      // TRUQUE PARA NÃO QUEBRAR: Se vier o ID fake de caixa livre, transforma em nulo
       cash_register_id: parsed.data.cashRegisterId === "00000000-0000-0000-0000-000000000000" ? null : parsed.data.cashRegisterId, 
       customer_id: parsed.data.clientId || null,
-      customer_name: parsed.data.customerName || "Cliente Avulso", // <-- ADICIONADO
-      source_id: parsed.data.sourceId || null,                     // <-- ADICIONADO
-      source_type: parsed.data.sourceType || null,                 // <-- ADICIONADO
+      customer_name: parsed.data.customerName || "Cliente Avulso",
+      source_id: parsed.data.sourceId || null, 
+      source_type: parsed.data.sourceType || null, 
       total_amount: realTotalAmount, 
       payment_method: parsed.data.paymentMethod
     }).select("id").single();
@@ -151,13 +153,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Erro ao salvar os itens da venda." }, { status: 500 });
     }
 
-    // 3. DISTRIBUIR O DINHEIRO (Inserir no Ledger do Barbeiro)
+    // 3. ATUALIZAR O ESTOQUE ATRAVÉS DO EVENT SOURCING
+    if (stockMovementsToInsert.length > 0) {
+      const { error: stockErr } = await supabase.from("stock_movements").insert(stockMovementsToInsert);
+      if (stockErr) console.error("🚨 [PDV ERRO GRAVE] Falha ao gravar movimentos de estoque:", stockErr);
+    }
+
+    // 4. DISTRIBUIR O DINHEIRO (Inserir no Ledger do Barbeiro)
     if (ledgersToInsert.length > 0) {
       const { error: ledgerError } = await supabase.from("staff_financial_ledgers").insert(ledgersToInsert);
       if (ledgerError) console.error("⚠️ [PDV AVISO] Falha ao registar a comissão no livro razão:", ledgerError);
     }
 
-    // 4. MÁQUINA DE ESTADOS: ATUALIZAR FILA OU AGENDA PARA COMPLETED
+    // 5. MÁQUINA DE ESTADOS: ATUALIZAR FILA OU AGENDA PARA COMPLETED
     if (parsed.data.sourceId && parsed.data.sourceType) {
       if (parsed.data.sourceType === "appointment") {
         const { error: appError } = await supabase.from("appointments").update({ status: "completed" }).eq("id", parsed.data.sourceId);
@@ -170,13 +178,13 @@ export async function POST(req: Request) {
 
     // Atualiza o cache de todas as telas afetadas para que a UI reflita a mudança na hora
     revalidatePath("/dashboard/pdv");
-    revalidatePath("/equipe/staff"); // Faturamento e Histórico do barbeiro
-    revalidatePath("/fila");         // Limpa o cliente da Fila
-    revalidatePath("/agendamentos"); // Limpa o cliente da Agenda
+    revalidatePath("/dashboard/produtos"); // <-- ADICIONADO: Atualiza o painel de produtos na hora
+    revalidatePath("/equipe/staff"); 
+    revalidatePath("/fila");         
+    revalidatePath("/agendamentos"); 
     
     return NextResponse.json({ success: true, orderId: order.id });
   } catch (e) {
-    // AGORA ELE VAI GRITAR O ERRO NO TERMINAL EM VEZ DE ESCONDER!
     console.error("🚨🚨 [PDV CATCH FATAL] Erro não tratado na rota de checkout:", e);
     return NextResponse.json({ error: "Erro interno no servidor." }, { status: 500 });
   }

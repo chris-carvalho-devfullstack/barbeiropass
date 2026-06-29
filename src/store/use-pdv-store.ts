@@ -3,12 +3,13 @@ import { create } from 'zustand';
 
 export type PDVItem = {
   id: string;
-  code: string;
+  sku?: string; // <-- Substituiu o 'code' antigo para produtos
+  barcode?: string | null; // <-- Suporte para o código de barras no PDV
   name: string;
   type: 'product' | 'service';
   quantity: number;
   displayPrice: number;
-  barberId?: string | null; // <-- ADICIONADO: Elo de ligação com a comissão
+  barberId?: string | null; // <-- Elo de ligação com a comissão
 };
 
 export type SelectedClient = {
@@ -17,14 +18,14 @@ export type SelectedClient = {
   document?: string | null;
   phone?: string | null;
   source?: 'walk_in' | 'appointment' | 'queue';
-  sourceId?: string | null; // <-- ADICIONADO: Para sabermos qual agendamento/fila finalizar
+  sourceId?: string | null; // <-- Para sabermos qual agendamento/fila finalizar
 };
 
 interface PDVState {
   isSaleActive: boolean;
   items: PDVItem[];
   client: SelectedClient | null;
-  currentBarberId: string | null; // <-- NOVO: Memória de quem é o barbeiro da sessão atual
+  currentBarberId: string | null; // <-- Memória de quem é o barbeiro da sessão atual
   
   startSale: (client?: SelectedClient | null, barberId?: string | null) => void;
   cancelSale: () => void;
@@ -32,7 +33,7 @@ interface PDVState {
   addItem: (item: Omit<PDVItem, 'quantity'>) => void;
   removeItem: (id: string) => void;
   updateQuantity: (id: string, quantity: number) => void;
-  updateItemBarber: (id: string, newBarberId: string | null) => void; // <-- NOVO: Altera o dono da comissão de um item
+  updateItemBarber: (id: string, newBarberId: string | null) => void; // <-- Altera o dono da comissão de um item
   clearCart: () => void;
   getCartTotal: () => number;
 }
