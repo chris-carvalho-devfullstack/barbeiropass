@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useForm, SubmitHandler } from "react-hook-form"; // Importação correta
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { productSchema, ProductFormValues } from "@/lib/validations/product";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -12,27 +13,32 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
+// 1. Extraímos o tipo de ENTRADA bruto do Zod para alinhar com os inputs do HTML
+type ProductFormInput = z.input<typeof productSchema>;
+
 export function CreateProductDialog() {
   const [open, setOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
-  // FIX 1: O generic <ProductFormValues> resolve o erro de atribuição do Resolver
-  const form = useForm<ProductFormValues>({
+  // 2. A MÁGICA DO TYPESCRIPT: Passamos os 3 genéricos (Input, Contexto, Output)
+  // Isso silencia o erro do "Resolver" e "SubmitHandler" perfeitamente sem usar 'any'
+  const form = useForm<ProductFormInput, unknown, ProductFormValues>({
     resolver: zodResolver(productSchema),
     defaultValues: {
       name: "",
       sku: "",
+      barcode: "",
       price: 0,
       cost_price: 0,
       stock_quantity: 0,
+      category_id: "", 
       is_active: true,
-      category_id: "",
     },
   });
 
-  // FIX 2: O tipo SubmitHandler garante que o 'data' seja exatamente o esperado pelo Zod
-  const onSubmit: SubmitHandler<ProductFormValues> = async (data) => {
+  // 3. O onSubmit recebe os dados já tipados perfeitamente como números (Output)
+  async function onSubmit(data: ProductFormValues) {
     setIsLoading(true);
     try {
       const res = await fetch("/api/produtos/manage", {
@@ -47,12 +53,14 @@ export function CreateProductDialog() {
       setOpen(false);
       form.reset();
       router.refresh();
-    } catch (_error) { // FIX 3: Variável não usada deve começar com _ ou ser removida
+    } catch (error) {
+      // 4. Usamos a variável 'error' em um console.error para o ESLint parar de reclamar
+      console.error("Erro no formulário de produtos:", error);
       toast.error("Erro ao salvar produto.");
     } finally {
       setIsLoading(false);
     }
-  };
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -78,15 +86,24 @@ export function CreateProductDialog() {
               <FormField name="sku" control={form.control} render={({ field }) => (
                 <FormItem>
                   <FormLabel>SKU</FormLabel>
-                  <FormControl><Input {...field} /></FormControl>
+                  <FormControl>
+                    <Input placeholder="Ex: POM-01" {...field} value={field.value || ""} />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
               <FormField name="price" control={form.control} render={({ field }) => (
                 <FormItem>
                   <FormLabel>Preço Venda (R$)</FormLabel>
-                  {/* .toString() no value ajuda o Input a lidar com números */}
-                  <FormControl><Input type="number" {...field} value={field.value.toString()} /></FormControl>
+                  <FormControl>
+                    <Input 
+                      type="number" 
+                      step="0.01" 
+                      {...field} 
+                      // O Input nativo espera strings ou undefined, garantimos isso visualmente
+                      value={field.value !== undefined ? String(field.value) : ""} 
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />

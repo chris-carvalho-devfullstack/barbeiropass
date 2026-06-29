@@ -7,6 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ProductTableActions } from "@/components/product-table-actions";
+import { CreateProductDialog } from "@/components/create-product-dialog";
+
+export const runtime = 'edge';
 
 export const metadata = {
   title: "Produtos | BarberPass",
@@ -49,10 +52,8 @@ export default async function ProdutosPage() {
           </p>
         </div>
         {isManager && (
-          <Button className="w-full sm:w-auto shadow-sm transition-all hover:scale-105">
-            <Plus className="mr-2 h-4 w-4" /> Novo Produto
-          </Button>
-        )}
+  <CreateProductDialog />
+)}
       </div>
 
       <Card className="border-border/50 shadow-sm bg-background/50 backdrop-blur-xl">
