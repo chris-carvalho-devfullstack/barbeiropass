@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea"; // <-- Importado o Textarea
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -31,6 +32,7 @@ type FotoState = {
 export interface ProductData {
   id: string;
   name: string;
+  description?: string | null; // <-- Adicionado na interface
   sku: string;
   barcode?: string | null;
   price: number;
@@ -65,6 +67,7 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
     resolver: zodResolver(productSchema),
     defaultValues: {
       name: product?.name || "",
+      description: product?.description || "", // <-- Valor inicial configurado
       sku: product?.sku || "",
       barcode: product?.barcode || "",
       price: product?.price ?? "", 
@@ -80,6 +83,7 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
     if (open && product) {
       form.reset({
         name: product.name,
+        description: product.description || "", // <-- Reset configurado para edição
         sku: product.sku,
         barcode: product.barcode || "",
         price: product.price ?? "",
@@ -311,6 +315,27 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                       <FormMessage />
                     </FormItem>
                   )} />
+
+                  {/* --- CAMPO DESCRIÇÃO ADICIONADO AQUI --- */}
+                  <FormField name="description" control={form.control} render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Descrição (Opcional)</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Ex: Pomada modeladora de alta fixação..."
+                          className="resize-none h-20"
+                          disabled={isSubmitting}
+                          maxLength={300}
+                          {...field}
+                          value={field.value || ""} 
+                        />
+                      </FormControl>
+                      <FormMessage />
+                      <p className="text-[10px] text-muted-foreground text-right mt-1">
+                        {field.value?.length || 0} / 300
+                      </p>
+                    </FormItem>
+                  )} />
                   
                   <FormField name="category_id" control={form.control} render={({ field }) => (
                     <FormItem>
@@ -384,7 +409,6 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                             onKeyDown={preventInvalidNumberKeys}
                             className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             {...field} 
-                            // Correção de tipagem aqui:
                             value={(field.value ?? "") as string | number}
                           />
                         </FormControl>
@@ -404,7 +428,6 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                             onKeyDown={preventInvalidNumberKeys}
                             className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             {...field} 
-                            // Correção de tipagem aqui:
                             value={(field.value ?? "") as string | number}
                           />
                         </FormControl>
@@ -425,7 +448,6 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                           className={`[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${isEditing ? "bg-muted cursor-not-allowed text-muted-foreground font-medium" : ""}`}
                           disabled={isEditing || isSubmitting} 
                           {...field} 
-                          // Correção de tipagem aqui:
                           value={(field.value ?? "") as string | number}
                         />
                       </FormControl>

@@ -1,10 +1,12 @@
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import Image from "next/image";
-import { Package, Image as ImageIcon, Barcode } from "lucide-react";
+import Link from "next/link";
+import { Package, Image as ImageIcon, Barcode, FolderCog } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { ProductTableActions } from "@/components/product-table-actions";
 import { CreateProductDialog } from "@/components/create-product-dialog";
 import { ProductFilters } from "@/components/product-filters";
@@ -75,7 +77,22 @@ export default async function ProdutosPage(props: {
           <h1 className="text-3xl font-bold tracking-tight">Produtos</h1>
           <p className="text-muted-foreground">Gerencie o estoque e catálogo da sua barbearia.</p>
         </div>
-        <CreateProductDialog />
+        
+        {/* Container flex para alinhar os botões lado a lado */}
+        <div className="flex w-full sm:w-auto flex-col sm:flex-row items-center gap-3">
+          
+          <Link href="/produtos/categorias" className="w-full sm:w-auto">
+            <Button variant="outline" className="w-full sm:w-auto flex items-center justify-center">
+              <FolderCog className="mr-2 h-4 w-4" />
+              Gerenciar Categorias
+            </Button>
+          </Link>
+
+          <div className="w-full sm:w-auto">
+            <CreateProductDialog />
+          </div>
+
+        </div>
       </div>
 
       <Card>

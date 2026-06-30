@@ -10,6 +10,11 @@ export const productSchema = z.object({
   category_id: z.string().uuid("Selecione uma categoria"),
   is_active: z.boolean().default(true),
   images: z.array(z.string()).default([]), // Adicionado para gerenciar as URLs das imagens
+  description: z
+    .string()
+    .max(300, "A descrição deve ter no máximo 300 caracteres.")
+    .transform((val) => val.replace(/[<>]/g, "").trim())
+    .optional(),
 });
 
 export type ProductFormValues = z.infer<typeof productSchema>;

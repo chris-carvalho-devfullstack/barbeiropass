@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Loader2, PlusCircle } from "lucide-react";
+import { Loader2, PlusCircle, FolderPlus } from "lucide-react"; // FolderPlus adicionado
 import { createClient } from "@/utils/supabase/client";
 
 // Esquema de validação simples para o nome da categoria
@@ -126,9 +126,11 @@ export function CreateCategoryDialog({ onCategoryCreated }: CreateCategoryDialog
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
+      {/* Botão de Trigger Atualizado */}
       <DialogTrigger asChild>
-        <Button type="button" variant="outline" size="icon" className="shrink-0" title="Nova Categoria">
-          <PlusCircle className="h-4 w-4" />
+        <Button type="button" className="w-full sm:w-auto flex items-center justify-center">
+          <FolderPlus className="mr-2 h-4 w-4" />
+          Criar Nova Categoria
         </Button>
       </DialogTrigger>
       

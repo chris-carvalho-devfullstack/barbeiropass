@@ -1,12 +1,14 @@
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Globe, Tag, Trash2, Package } from "lucide-react";
+import { ArrowLeft, Globe, Tag, Trash2, Package, FolderPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { CategoryManagerClient } from "./category-manager-client"; // Nosso client component (vamos criar abaixo)
+import { CategoryManagerClient } from "./category-manager-client"; 
+import { CreateCategoryDialog } from "@/components/create-category-dialog";
+import { UpgradePlanModal } from "@/components/upgrade-plan-modal";
 
 export const runtime = 'edge';
 
@@ -28,6 +30,12 @@ export default async function CategoriasPage() {
     .single();
 
   if (!member) redirect("/dashboard");
+
+  // ==========================================
+  // CONTORNO TEMPORÁRIO PARA PLANOS DE ASSINATURA
+  // Altere para true para simular um usuário Ultimate e liberar a criação
+  // ==========================================
+  const isUltimatePlan = false; // Altere para true para simular um usuário Ultimate e liberar a criação
 
   // 1. Buscamos todas as categorias (Globais + Locais da Barbearia)
   const { data: categories } = await supabase
@@ -58,16 +66,34 @@ export default async function CategoriasPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/produtos">
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Categorias</h1>
-          <p className="text-muted-foreground">Gerencie a organização do seu catálogo.</p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" asChild>
+            <Link href="/produtos">
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Categorias</h1>
+            <p className="text-muted-foreground">Gerencie a organização do seu catálogo.</p>
+          </div>
         </div>
+
+        {/* Botão Condicional baseado no Plano */}
+        <div className="w-full sm:w-auto">
+          {isUltimatePlan ? (
+            <CreateCategoryDialog />
+          ) : (
+            <UpgradePlanModal>
+              <Button className="w-full sm:w-auto flex items-center justify-center">
+                <FolderPlus className="mr-2 h-4 w-4" />
+                Criar Nova Categoria
+              </Button>
+            </UpgradePlanModal>
+          )}
+        </div>
+
       </div>
 
       <Card>
