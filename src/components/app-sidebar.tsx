@@ -36,7 +36,7 @@ const items = [
   { title: "Fila Virtual", url: "/fila", icon: ListOrdered },
   { title: "Agenda", url: "/agendamentos", icon: Calendar },
   { title: "Serviços", url: "/servicos", icon: Scissors },
-  { title: "Produtos", url: "#", icon: Package },
+  { title: "Produtos", url: "/produtos", icon: Package },
   { title: "Clientes (CRM)", url: "/clientes", icon: Users },
   { title: "Equipe", url: "/equipe", icon: IdCard },
   { title: "Fluxo de Caixa", url: "#", icon: DollarSign },

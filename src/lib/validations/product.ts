@@ -9,6 +9,7 @@ export const productSchema = z.object({
   stock_quantity: z.coerce.number().int().min(0, "Quantidade deve ser 0 ou maior"),
   category_id: z.string().uuid("Selecione uma categoria"),
   is_active: z.boolean().default(true),
+  images: z.array(z.string()).default([]), // Adicionado para gerenciar as URLs das imagens
 });
 
 export type ProductFormValues = z.infer<typeof productSchema>;
