@@ -45,9 +45,8 @@ export function ProductTableActions({ product }: ProductTableActionsProps) {
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Tem certeza que deseja excluir o produto ${product.name}?`)) return;
-    
+  // Função que realmente executa a exclusão no banco
+  const executeDelete = async () => {
     setIsLoading(true);
     try {
       const res = await fetch(`/api/produtos?id=${product.id}`, { method: "DELETE" });
@@ -62,6 +61,21 @@ export function ProductTableActions({ product }: ProductTableActionsProps) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Substituímos o window.confirm por um Toast de confirmação do Sonner
+  const handleDelete = () => {
+    toast("Confirmar exclusão", {
+      description: `Tem certeza que deseja excluir o produto ${product.name}?`,
+      action: {
+        label: "Sim, excluir",
+        onClick: () => executeDelete(),
+      },
+      cancel: {
+        label: "Cancelar",
+        onClick: () => {},
+      },
+    });
   };
 
   return (
@@ -93,9 +107,6 @@ export function ProductTableActions({ product }: ProductTableActionsProps) {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Ao passar a prop "trigger" com uma div oculta (hidden), 
-        nós evitamos que o botão verde padrão seja criado para cada linha da tabela. 
-      */}
       <CreateProductDialog 
         product={product} 
         open={isEditDialogOpen} 

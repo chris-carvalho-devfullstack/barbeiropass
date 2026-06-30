@@ -41,7 +41,6 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
-    // Tratamento tipado do erro
     const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
     console.error("🚨 [API PRODUTOS] Erro no PATCH:", errorMessage);
     
@@ -70,12 +69,13 @@ export async function DELETE(req: Request) {
 
     if (!member) return NextResponse.json({ error: "Permissão negada" }, { status: 403 });
 
-    // Exclusão Lógica: Inativa o produto e "libera" o SKU/Slug
+    // Exclusão Lógica: Inativa, preenche o deleted_at e libera o SKU/Slug
     const timestamp = Date.now();
     const { error } = await supabase
       .from("products")
       .update({ 
         is_active: false, 
+        deleted_at: new Date().toISOString(), // <-- AQUI: Inserimos a data e hora da exclusão
         sku: `deleted-${timestamp}-${productId}`,
         slug: `deleted-${timestamp}-${productId}` 
       })
@@ -88,7 +88,6 @@ export async function DELETE(req: Request) {
     
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
-    // Tratamento tipado do erro
     const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
     console.error("🚨 [API PRODUTOS] Erro no DELETE:", errorMessage);
     

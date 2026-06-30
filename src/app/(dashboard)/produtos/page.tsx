@@ -1,13 +1,14 @@
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
-import Image from "next/image"; // <-- Importado o componente Image do Next.js
-import { Button } from "@/components/ui/button";
-import { Plus, Package, Barcode, Image as ImageIcon } from "lucide-react";
+import Image from "next/image";
+import { Package, Image as ImageIcon, Barcode } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ProductTableActions } from "@/components/product-table-actions";
 import { CreateProductDialog } from "@/components/create-product-dialog";
+import { ProductFilters } from "@/components/product-filters";
+import { PaginationControls } from "@/components/pagination-controls"; // Importamos o novo componente
 
 export const runtime = 'edge';
 
@@ -16,7 +17,9 @@ export const metadata = {
   description: "Gerenciamento de produtos e estoque.",
 };
 
-export default async function ProdutosPage() {
+export default async function ProdutosPage(props: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   
@@ -30,52 +33,68 @@ export default async function ProdutosPage() {
 
   if (!member) redirect("/dashboard");
 
-  // Fetch ultrarrápido direto no servidor, já trazendo as categorias ligadas
-  const { data: products } = await supabase
+  const searchParams = await props.searchParams;
+  const q = typeof searchParams.q === 'string' ? searchParams.q : "";
+  const status = typeof searchParams.status === 'string' ? searchParams.status : "ativo";
+  
+  // Parâmetros de Paginação (com defaults)
+  const page = typeof searchParams.page === 'string' ? parseInt(searchParams.page, 10) : 1;
+  const limit = typeof searchParams.limit === 'string' ? parseInt(searchParams.limit, 10) : 20;
+  
+  // Cálculo do Range para o Supabase (ex: page 1 com limit 20 = de 0 a 19)
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  // Query do Supabase com pedido explícito da contagem total
+  let supabaseQuery = supabase
     .from("products")
-    .select(`
-      id, name, sku, barcode, price, stock_quantity, is_active, images,
-      category:product_categories(name)
-    `)
+    .select(`id, name, sku, barcode, price, cost_price, stock_quantity, category_id, is_active, images, category:product_categories(name)`, { count: 'exact' })
     .eq("barbershop_id", member.barbershop_id)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
 
-  const isManager = member.role === "owner" || member.role === "manager";
+  if (q) {
+    supabaseQuery = supabaseQuery.or(`name.ilike.%${q}%,sku.ilike.%${q}%,barcode.ilike.%${q}%`);
+  }
+
+  if (status === "ativo") {
+    supabaseQuery = supabaseQuery.eq("is_active", true);
+  } else if (status === "inativo") {
+    supabaseQuery = supabaseQuery.eq("is_active", false);
+  }
+
+  // Aplicamos o limite de paginação
+  supabaseQuery = supabaseQuery.range(from, to);
+
+  const { data: products, count } = await supabaseQuery;
 
   return (
-    <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-foreground">Produtos</h2>
-          <p className="text-muted-foreground text-sm">
-            Gerencie seu catálogo, estoque e códigos de barra para o PDV.
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight">Produtos</h1>
+          <p className="text-muted-foreground">Gerencie o estoque e catálogo da sua barbearia.</p>
         </div>
-        {isManager && (
-  <CreateProductDialog />
-)}
+        <CreateProductDialog />
       </div>
 
-      <Card className="border-border/50 shadow-sm bg-background/50 backdrop-blur-xl">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Package className="h-5 w-5 text-primary" />
-            Estoque Atual
-          </CardTitle>
+      <Card>
+        <CardHeader>
+          <CardTitle>Estoque de Produtos</CardTitle>
           <CardDescription>
-            {products?.length || 0} produtos cadastrados no sistema.
+            Visualize, filtre e gerencie todos os produtos disponíveis no seu PDV.
           </CardDescription>
         </CardHeader>
-        <CardContent className="p-0 sm:p-6 sm:pt-0">
-          <div className="rounded-md border border-border/50 overflow-x-auto">
-            {/* CORREÇÃO 1: min-w-[800px] -> min-w-200 */}
-            <Table className="min-w-200">
-              <TableHeader className="bg-muted/30">
+        <CardContent>
+          
+          <ProductFilters />
+
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  {/* CORREÇÃO 2: w-[60px] -> w-15 */}
-                  <TableHead className="w-15 text-center">Foto</TableHead>
+                  <TableHead className="w-20">Imagem</TableHead>
                   <TableHead>Produto</TableHead>
-                  <TableHead>SKU / Barras</TableHead>
                   <TableHead className="text-right">Preço</TableHead>
                   <TableHead className="text-center">Estoque</TableHead>
                   <TableHead className="text-center">Status</TableHead>
@@ -83,47 +102,41 @@ export default async function ProdutosPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products?.length === 0 ? (
+                {!products || products.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
-                      Nenhum produto encontrado. Adicione seu primeiro item!
+                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                      {q || status !== "todos" 
+                        ? "Nenhum produto encontrado com estes filtros." 
+                        : "Nenhum produto cadastrado na barbearia."}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  products?.map((product) => (
-                    <TableRow key={product.id} className="hover:bg-muted/20 transition-colors">
-                      <TableCell className="text-center">
+                  products.map((product) => (
+                    <TableRow key={product.id}>
+                      <TableCell>
                         {product.images && product.images.length > 0 ? (
-                          /* CORREÇÃO 3: <img> alterado para o componente hiper-otimizado <Image /> */
-                          <Image 
-                            src={product.images[0]} 
+                          <Image
+                            src={product.images[0]}
                             alt={product.name}
                             width={40}
                             height={40}
-                            className="h-10 w-10 rounded-md object-cover border border-border/50 shadow-sm"
+                            className="rounded-md object-cover w-10 h-10 border"
                           />
                         ) : (
-                          <div className="h-10 w-10 rounded-md bg-muted flex items-center justify-center border border-border/50">
-                            <ImageIcon className="h-4 w-4 text-muted-foreground/50" />
+                          <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center border">
+                            <ImageIcon className="w-4 h-4 text-muted-foreground" />
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className="font-medium">
-                        {product.name}
-                        <div className="text-xs text-muted-foreground mt-1">
-                          {/* CORREÇÃO 4: @ts-ignore -> @ts-expect-error */}
-                          {/* @ts-expect-error - lidando com array do join do supabase */}
-                          {product.category?.name || "Sem categoria"}
-                        </div>
-                      </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <span className="text-xs font-mono bg-muted/50 px-2 py-0.5 rounded w-fit border border-border/50">
-                            {product.sku}
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">{product.name}</span>
+                          <span className="text-xs text-muted-foreground flex gap-1.5 items-center">
+                            <Package className="w-3 h-3" /> SKU: {product.sku}
                           </span>
                           {product.barcode && (
-                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                              <Barcode className="h-3 w-3" /> {product.barcode}
+                            <span className="text-xs text-muted-foreground flex gap-1.5 items-center">
+                              <Barcode className="w-3 h-3" /> EAN: {product.barcode}
                             </span>
                           )}
                         </div>
@@ -145,13 +158,17 @@ export default async function ProdutosPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <ProductTableActions product={{ id: product.id, is_active: product.is_active, name: product.name }} />
+                        <ProductTableActions product={product} />
                       </TableCell>
                     </TableRow>
                   ))
                 )}
               </TableBody>
             </Table>
+            
+            {/* Aqui incluímos os controlos de paginação, passando a contagem total */}
+            <PaginationControls totalItems={count || 0} currentPage={page} limit={limit} />
+            
           </div>
         </CardContent>
       </Card>
