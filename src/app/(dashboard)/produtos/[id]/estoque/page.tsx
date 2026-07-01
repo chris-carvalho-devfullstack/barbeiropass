@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client'; 
 import { toast } from 'sonner';
 
+export const runtime = 'edge';
+
 // Tipagem rigorosa para substituir o 'any'
 interface ProductDetails {
   id: string;
