@@ -1,16 +1,15 @@
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
-import { Package, Image as ImageIcon, Barcode, FolderCog } from "lucide-react";
+import { FolderCog } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { ProductTableActions } from "@/components/product-table-actions";
 import { CreateProductDialog } from "@/components/create-product-dialog";
 import { ProductFilters } from "@/components/product-filters";
-import { PaginationControls } from "@/components/pagination-controls"; // Importamos o novo componente
+import { PaginationControls } from "@/components/pagination-controls";
+// IMPORTANTE: Importamos também a interface ProductRowExtended
+import { ProductRow, ProductRowExtended } from "@/components/product-row"; 
 
 export const runtime = 'edge';
 
@@ -39,18 +38,15 @@ export default async function ProdutosPage(props: {
   const q = typeof searchParams.q === 'string' ? searchParams.q : "";
   const status = typeof searchParams.status === 'string' ? searchParams.status : "ativo";
   
-  // Parâmetros de Paginação (com defaults)
   const page = typeof searchParams.page === 'string' ? parseInt(searchParams.page, 10) : 1;
   const limit = typeof searchParams.limit === 'string' ? parseInt(searchParams.limit, 10) : 20;
   
-  // Cálculo do Range para o Supabase (ex: page 1 com limit 20 = de 0 a 19)
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
-  // Query do Supabase com pedido explícito da contagem total
   let supabaseQuery = supabase
     .from("products")
-    .select(`id, name, sku, barcode, price, cost_price, stock_quantity, category_id, is_active, images, category:product_categories(name)`, { count: 'exact' })
+    .select(`id, name, description, sku, barcode, price, cost_price, stock_quantity, category_id, is_active, images, category:product_categories(name)`, { count: 'exact' })
     .eq("barbershop_id", member.barbershop_id)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
@@ -65,46 +61,46 @@ export default async function ProdutosPage(props: {
     supabaseQuery = supabaseQuery.eq("is_active", false);
   }
 
-  // Aplicamos o limite de paginação
   supabaseQuery = supabaseQuery.range(from, to);
 
-  const { data: products, count } = await supabaseQuery;
+  const { data, count } = await supabaseQuery;
+  
+  // TIPAGEM ESTRITA: Dizemos ao TypeScript exatamente o que retorna do banco
+  const products = data as ProductRowExtended[] | null;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="px-0 py-3 sm:p-5 max-w-7xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Produtos</h1>
           <p className="text-muted-foreground">Gerencie o estoque e catálogo da sua barbearia.</p>
         </div>
         
-        {/* Container flex para alinhar os botões lado a lado */}
         <div className="flex w-full sm:w-auto flex-col sm:flex-row items-center gap-3">
-          
           <Link href="/produtos/categorias" className="w-full sm:w-auto">
             <Button variant="outline" className="w-full sm:w-auto flex items-center justify-center">
               <FolderCog className="mr-2 h-4 w-4" />
               Gerenciar Categorias
             </Button>
           </Link>
-
           <div className="w-full sm:w-auto">
             <CreateProductDialog />
           </div>
-
         </div>
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Estoque de Produtos</CardTitle>
           <CardDescription>
             Visualize, filtre e gerencie todos os produtos disponíveis no seu PDV.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          
-          <ProductFilters />
+        
+        <CardContent className="px-3 sm:px-6 pb-6">
+          <div className="mb-4">
+            <ProductFilters />
+          </div>
 
           <div className="rounded-md border overflow-x-auto">
             <Table>
@@ -128,63 +124,17 @@ export default async function ProdutosPage(props: {
                     </TableCell>
                   </TableRow>
                 ) : (
+                  // Agora passamos o produto limpo e validado pelo TypeScript!
                   products.map((product) => (
-                    <TableRow key={product.id}>
-                      <TableCell>
-                        {product.images && product.images.length > 0 ? (
-                          <Image
-                            src={product.images[0]}
-                            alt={product.name}
-                            width={40}
-                            height={40}
-                            className="rounded-md object-cover w-10 h-10 border"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center border">
-                            <ImageIcon className="w-4 h-4 text-muted-foreground" />
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="font-medium">{product.name}</span>
-                          <span className="text-xs text-muted-foreground flex gap-1.5 items-center">
-                            <Package className="w-3 h-3" /> SKU: {product.sku}
-                          </span>
-                          {product.barcode && (
-                            <span className="text-xs text-muted-foreground flex gap-1.5 items-center">
-                              <Barcode className="w-3 h-3" /> EAN: {product.barcode}
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.price)}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Badge 
-                          variant={product.stock_quantity > 5 ? "default" : product.stock_quantity > 0 ? "secondary" : "destructive"}
-                          className="font-mono"
-                        >
-                          {product.stock_quantity}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Badge variant={product.is_active ? "outline" : "secondary"} className={product.is_active ? "text-emerald-500 border-emerald-500/30" : "opacity-50"}>
-                          {product.is_active ? "Ativo" : "Inativo"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <ProductTableActions product={product} />
-                      </TableCell>
-                    </TableRow>
+                    <ProductRow key={product.id} product={product} />
                   ))
                 )}
               </TableBody>
             </Table>
             
-            {/* Aqui incluímos os controlos de paginação, passando a contagem total */}
-            <PaginationControls totalItems={count || 0} currentPage={page} limit={limit} />
+            <div className="p-4 border-t">
+              <PaginationControls totalItems={count || 0} currentPage={page} limit={limit} />
+            </div>
             
           </div>
         </CardContent>
