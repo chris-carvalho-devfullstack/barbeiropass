@@ -10,13 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea"; // <-- Importado o Textarea
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { Loader2, UploadCloud, X, GripVertical, CheckCircle2, Plus } from "lucide-react";
+import { Loader2, UploadCloud, X, GripVertical, CheckCircle2, Plus, Info } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { CreateCategoryDialog } from "@/components/create-category-dialog"; 
 
@@ -32,12 +32,13 @@ type FotoState = {
 export interface ProductData {
   id: string;
   name: string;
-  description?: string | null; // <-- Adicionado na interface
+  description?: string | null;
   sku: string;
   barcode?: string | null;
   price: number;
   cost_price: number;
   stock_quantity: number;
+  commission_percentage?: number | null; // <-- NOVA PROPRIEDADE
   category_id: string;
   is_active: boolean;
   images?: string[] | null;
@@ -67,12 +68,13 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
     resolver: zodResolver(productSchema),
     defaultValues: {
       name: product?.name || "",
-      description: product?.description || "", // <-- Valor inicial configurado
+      description: product?.description || "",
       sku: product?.sku || "",
       barcode: product?.barcode || "",
       price: product?.price ?? "", 
       cost_price: product?.cost_price ?? "",
-      stock_quantity: product?.stock_quantity ?? "",
+      commission_percentage: product?.commission_percentage ?? "", // <-- VALOR DEFAULT DA COMISSÃO
+      stock_quantity: product?.stock_quantity ?? 0, // <-- Forçando 0 no cadastro
       category_id: product?.category_id || "", 
       is_active: product?.is_active ?? true,
       images: product?.images || [],
@@ -83,12 +85,13 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
     if (open && product) {
       form.reset({
         name: product.name,
-        description: product.description || "", // <-- Reset configurado para edição
+        description: product.description || "",
         sku: product.sku,
         barcode: product.barcode || "",
         price: product.price ?? "",
         cost_price: product.cost_price ?? "",
-        stock_quantity: product.stock_quantity ?? "",
+        commission_percentage: product.commission_percentage ?? "", // <-- RESET DA COMISSÃO
+        stock_quantity: product.stock_quantity ?? 0,
         category_id: product.category_id,
         is_active: product.is_active,
         images: product.images || [],
@@ -291,7 +294,7 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
         <DialogHeader className="p-6 pb-2">
           <DialogTitle>{isEditing ? "Editar Produto" : "Novo Produto"}</DialogTitle>
           <DialogDescription>
-            {isEditing ? "Atualize as informações, fotos e valores do produto." : "Cadastre um novo item, defina precificação e estoque inicial."}
+            {isEditing ? "Atualize as informações, fotos e valores do produto." : "Cadastre um novo item e defina a precificação."}
           </DialogDescription>
         </DialogHeader>
         
@@ -316,7 +319,6 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                     </FormItem>
                   )} />
 
-                  {/* --- CAMPO DESCRIÇÃO ADICIONADO AQUI --- */}
                   <FormField name="description" control={form.control} render={({ field }) => (
                     <FormItem>
                       <FormLabel>Descrição (Opcional)</FormLabel>
@@ -394,7 +396,7 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                 </TabsContent>
 
                 {/* --- ABA VALORES E ESTOQUE --- */}
-                <TabsContent value="valores" className="space-y-4 mt-0">
+                <TabsContent value="valores" className="space-y-6 mt-0">
                   <div className="grid grid-cols-2 gap-4">
                     <FormField name="cost_price" control={form.control} render={({ field }) => (
                       <FormItem>
@@ -436,29 +438,56 @@ export function ProductFormDialog({ product, open: controlledOpen, onOpenChange,
                     )} />
                   </div>
 
-                  <FormField name="stock_quantity" control={form.control} render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Estoque {isEditing ? "Atual" : "Inicial"}</FormLabel>
-                      <FormControl>
-                        <Input 
-                          type="number" 
-                          min="0"
-                          placeholder="Ex: 50" 
-                          onKeyDown={preventInvalidNumberKeys}
-                          className={`[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${isEditing ? "bg-muted cursor-not-allowed text-muted-foreground font-medium" : ""}`}
-                          disabled={isEditing || isSubmitting} 
-                          {...field} 
-                          value={(field.value ?? "") as string | number}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {isEditing 
-                          ? "O saldo é rastreado de forma segura via Histórico de Movimentações (Entradas/Saídas)." 
-                          : "Um registro de entrada inicial será gerado automaticamente."}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* CAMPO DE COMISSÃO DO PRODUTO */}
+                    <FormField name="commission_percentage" control={form.control} render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Comissão por Venda (%)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            step="0.1" 
+                            min="0"
+                            max="100"
+                            placeholder="Ex: 10" 
+                            disabled={isSubmitting}
+                            onKeyDown={preventInvalidNumberKeys}
+                            className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            {...field} 
+                            value={(field.value ?? "") as string | number}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
+                    {/* CAMPO DE ESTOQUE (BLOQUEADO) */}
+                    <FormField name="stock_quantity" control={form.control} render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Estoque {isEditing ? "Atual" : "Inicial"}</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            min="0"
+                            className="bg-muted cursor-not-allowed text-muted-foreground font-bold"
+                            disabled={true} // <-- SEMPRE BLOQUEADO PARA FORÇAR O EVENT SOURCING
+                            {...field} 
+                            value={(field.value ?? 0) as string | number}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
+                  
+                  {/* ALERTA DE RASTREABILIDADE */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-3 items-start">
+                    <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-900">Estoque rastreável e seguro</p>
+                      <p className="text-xs text-amber-700 mt-1">Para garantir auditoria total contra perdas, o estoque só pode ser adicionado/removido na tela de <span className="font-bold">Ações &gt; Ajustar Estoque</span> após o cadastro.</p>
+                    </div>
+                  </div>
                 </TabsContent>
 
                 {/* --- ABA MÍDIA --- */}

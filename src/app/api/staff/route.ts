@@ -325,3 +325,46 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: 'Erro interno no servidor' }, { status: 500 });
   }
 }
+
+// Adicione no final do arquivo: src/app/api/staff/route.ts
+
+// ==========================================
+// BUSCA SEGURA DE EQUIPE (GET) - ZERO TRUST
+// ==========================================
+export async function GET(request: Request) {
+  try {
+    const supabase = await createClient();
+    
+    // 1. Verifica quem está logado
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
+    // 2. Descobre de qual barbearia este usuário faz parte
+    const { data: member, error: memberError } = await supabase
+      .from('barbershop_members')
+      .select('barbershop_id')
+      .eq('profile_id', user.id)
+      .single();
+
+    if (memberError || !member) {
+      return NextResponse.json({ error: 'Vínculo com barbearia não encontrado.' }, { status: 403 });
+    }
+
+    // 3. Busca APENAS os funcionários ativos desta barbearia específica
+    const { data: staff, error: staffError } = await supabase
+      .from('staff')
+      .select('id, full_name')
+      .eq('barbershop_id', member.barbershop_id)
+      .eq('is_active', true)
+      .order('full_name', { ascending: true });
+
+    if (staffError) throw staffError;
+
+    return NextResponse.json({ staff });
+  } catch (error: unknown) {
+    console.error("Erro ao buscar equipe:", error);
+    return NextResponse.json({ error: 'Erro interno no servidor' }, { status: 500 });
+  }
+}

@@ -48,23 +48,18 @@ export const usePDVStore = create<PDVState>((set, get) => ({
   cancelSale: () => set({ isSaleActive: false, client: null, items: [], currentBarberId: null }),
 
   addItem: (newItem) => set((state) => {
-    // REGRA DE NEGÓCIO BLINDADA:
-    // 1. Se já vier um barberId explícito (ex: da Agenda), respeita.
-    // 2. Se for PRODUTO, entra como null (sem comissão), a menos que forçado.
-    // 3. Se for SERVIÇO e não tiver dono, usa o barbeiro da sessão como "sugestão".
+    // REGRA DE NEGÓCIO ATUALIZADA:
+    // Agora TANTO produtos quanto serviços podem receber comissão.
+    // Se não vier um barbeiro explícito, assumimos o barbeiro atual da sessão.
     let finalBarberId = newItem.barberId;
     
     if (finalBarberId === undefined) {
-      if (newItem.type === 'product') {
-        finalBarberId = null; 
-      } else if (newItem.type === 'service') {
-        finalBarberId = state.currentBarberId;
-      }
+      finalBarberId = state.currentBarberId;
     }
 
     const itemToMatch = { ...newItem, barberId: finalBarberId };
 
-    // Compara pelo ID e também pelo barberId, para não misturar serviços de barbeiros diferentes no mesmo item
+    // Compara pelo ID e também pelo barberId, para não misturar itens com e sem comissão
     const existingItemIndex = state.items.findIndex(
       i => i.id === itemToMatch.id && i.barberId === itemToMatch.barberId
     );

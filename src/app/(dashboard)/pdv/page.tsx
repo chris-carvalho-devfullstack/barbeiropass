@@ -12,7 +12,7 @@ import {
 import { toast } from "sonner";
 import { 
   Barcode, Trash2, CreditCard, Banknote, QrCode, Loader2, 
-  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, ArrowRight, X, UserPlus, Sparkles, Scissors, ChevronRight
+  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, X, UserPlus, Sparkles, Scissors, ChevronRight
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 import { createClient } from "@/utils/supabase/client";
-
 
 // =========================================================================
 // TIPAGENS DE ESTRUTURA E APIs
@@ -31,7 +30,8 @@ type SuggestedItem = {
   id: string; 
   name: string; 
   price: number; 
-  code: string; 
+  sku?: string; // Corrigido de code para sku
+  barcode?: string; // Adicionado suporte ao código de barras
   type: "product" | "service"; 
 };
 
@@ -67,9 +67,6 @@ type StaffMember = {
 
 export default function PDVPage() {
   
-  // =========================================================================
-  // ESTADOS GLOBAIS (ZUSTAND) E LOCAIS
-  // =========================================================================
   const { 
     isSaleActive, client, items, startSale, cancelSale, 
     addItem, removeItem, updateQuantity, updateItemBarber, getCartTotal, clearCart 
@@ -98,20 +95,22 @@ export default function PDVPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Instância unificada do Supabase
   const supabase = createClient();
 
-  // =========================================================================
-  // EFEITOS E BUSCAS
-  // =========================================================================
-  
   useEffect(() => {
     const fetchStaff = async () => {
-      const { data } = await supabase.from('staff').select('id, full_name').eq('is_active', true);
-      if (data) setStaffMembers(data);
+      try {
+        const res = await fetch('/api/staff');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.staff) setStaffMembers(data.staff);
+        }
+      } catch (e) {
+        console.error("Erro ao buscar equipe", e);
+      }
     };
     fetchStaff();
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -129,7 +128,6 @@ export default function PDVPage() {
     }
   }, [isSaleActive, isSheetOpen, items]);
 
-  // Busca os clientes aguardando na API Otimizada
   const fetchPendingClients = useCallback(async () => {
     setIsLoadingPending(true);
     try {
@@ -146,12 +144,10 @@ export default function PDVPage() {
     }
   }, []);
 
-  // MAGIA UI/UX: Realtime + Initial Fetch
   useEffect(() => {
     if (!isSaleActive) {
       fetchPendingClients();
 
-      // O Caixa escuta as tabelas em tempo real. Se o barbeiro finaliza lá atrás, aparece aqui na frente na hora.
       const channel = supabase
         .channel('pdv-pending-sync')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'virtual_queue' }, () => {
@@ -194,10 +190,6 @@ export default function PDVPage() {
     return () => clearTimeout(delay);
   }, [searchInput]);
 
-  // =========================================================================
-  // AÇÕES DO USUÁRIO
-  // =========================================================================
-  
   const handleStartSale = (
     selectedClient: SelectedClient | null, 
     context?: CheckoutContext, 
@@ -212,8 +204,8 @@ export default function PDVPage() {
     if (servicesToImport && servicesToImport.length > 0) {
       servicesToImport.forEach(svc => {
         const newItem = { 
-          id: svc.id, // <--- CORREÇÃO: Usar o ID real que veio do banco de dados!
-          code: "ATENDIMENTO", 
+          id: svc.id, 
+          sku: "ATENDIMENTO", 
           name: svc.name, 
           type: "service" as const, 
           displayPrice: svc.price,
@@ -246,7 +238,15 @@ export default function PDVPage() {
   };
 
   const selectSuggestedItem = (item: SuggestedItem) => {
-    addItem({ id: item.id, code: item.code, name: item.name, type: item.type, displayPrice: item.price });
+    // Agora enviamos sku e barcode perfeitamente mapeados para o Zustand
+    addItem({ 
+      id: item.id, 
+      sku: item.sku, 
+      barcode: item.barcode, 
+      name: item.name, 
+      type: item.type, 
+      displayPrice: item.price 
+    });
     setSearchInput("");
     setSuggestions([]);
     inputRef.current?.focus();
@@ -299,14 +299,9 @@ export default function PDVPage() {
   const queueClients = pendingClients.filter(c => c.origin === "queue");
   const appointmentClients = pendingClients.filter(c => c.origin === "appointment");
 
-  // =========================================================================
-  // RENDERIZAÇÃO: TELA 1 (CAIXA LIVRE - DASHBOARD PREMIUM)
-  // =========================================================================
   if (!isSaleActive) {
     return (
       <div className="flex flex-col h-[calc(100dvh-2.5rem)] bg-slate-50 md:h-[calc(100vh-3.5rem)] md:m-2 md:rounded-[2rem] md:border md:border-slate-200/60 shadow-sm overflow-hidden relative">
-        
-        {/* HEADER DA TELA LIVRE */}
         <header className="px-6 py-8 md:px-10 md:py-8 bg-white border-b border-slate-200/50 flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 z-10">
           <div>
             <div className="flex items-center gap-3 mb-1">
@@ -315,16 +310,12 @@ export default function PDVPage() {
               </div>
               <h1 className="text-3xl font-black text-slate-900 tracking-tight">Caixa Livre</h1>
             </div>
-            <p className="text-slate-500 font-medium ml-[3.25rem]">Pronto para iniciar um novo recebimento.</p>
+            <p className="text-slate-500 font-medium ml-13">Pronto para iniciar um novo recebimento.</p>
           </div>
-          {/* BOTÃO REMOVIDO: A REATIVIDADE (REALTIME) ASSUME O CONTROLE */}
         </header>
 
-        {/* CORPO DA TELA LIVRE (COM SCROLL) */}
         <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
           <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-            
-            {/* COLUNA ESQUERDA: LISTA DE PENDENTES */}
             <div className="lg:col-span-2 space-y-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
@@ -348,7 +339,6 @@ export default function PDVPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in zoom-in-95 duration-300">
-                  {/* FILA VIRTUAL */}
                   {queueClients.map(q => (
                     <button 
                       key={q.id} 
@@ -390,7 +380,6 @@ export default function PDVPage() {
                     </button>
                   ))}
 
-                  {/* AGENDAMENTOS */}
                   {appointmentClients.map(a => (
                     <button 
                       key={a.id} 
@@ -435,7 +424,6 @@ export default function PDVPage() {
               )}
             </div>
 
-            {/* COLUNA DIREITA: NOVA VENDA AVULSA */}
             <div className="space-y-6">
               <h2 className="text-xl font-black text-slate-900">Novo Atendimento</h2>
               
@@ -451,7 +439,6 @@ export default function PDVPage() {
                   />
                   {isSearchingClient && <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-5 w-5 text-blue-500 animate-spin" />}
                   
-                  {/* Dropdown de Clientes */}
                   {clientSuggestions.length > 0 && (
                     <div className="absolute left-0 right-0 top-[110%] bg-white border border-slate-200/80 shadow-xl rounded-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
                       {clientSuggestions.map((c) => (
@@ -463,7 +450,6 @@ export default function PDVPage() {
                     </div>
                   )}
 
-                  {/* Cadastro Rápido */}
                   {clientSearch.length >= 3 && clientSuggestions.length === 0 && !isSearchingClient && (
                     <button onClick={handleQuickCreateClient} className="absolute left-0 right-0 top-[110%] z-50 w-full flex items-center justify-center gap-2 p-4 bg-blue-600 text-white hover:bg-blue-700 rounded-xl font-bold shadow-lg transition-colors animate-in fade-in slide-in-from-top-2">
                       <UserPlus className="h-5 w-5" /> Cadastrar &quot;{clientSearch}&quot;
@@ -489,14 +475,10 @@ export default function PDVPage() {
     );
   }
 
-  // =========================================================================
-  // RENDERIZAÇÃO: TELA 2 (PDV ATIVO / CARRINHO DE COMPRAS Fixo)
-  // =========================================================================
   return (
     <div className="flex flex-col h-[calc(100dvh-2.5rem)] bg-slate-50 text-slate-900 md:h-[calc(100vh-3.5rem)] md:m-2 md:mt-0.5 md:rounded-2xl md:border md:border-slate-200/80 md:overflow-hidden md:shadow-sm relative transition-all">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         
-        {/* COLUNA ESQUERDA: BARRA DE PESQUISA E ITENS */}
         <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 md:border-r md:border-slate-200/60">
           
           <header className="p-4 border-b border-slate-200/70 flex items-center justify-between bg-white shrink-0 shadow-sm z-20">
@@ -525,7 +507,7 @@ export default function PDVPage() {
               <Input
                 ref={inputRef}
                 type="text"
-                placeholder="Busque por nome ou código SKU..."
+                placeholder="Busque por nome, SKU ou Código de Barras..."
                 className="pl-12 h-14 text-base font-medium bg-slate-50 border-slate-200 text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-600/20 focus-visible:border-blue-600 rounded-xl transition-all"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -544,15 +526,17 @@ export default function PDVPage() {
                     className="w-full flex items-center justify-between p-4 text-left hover:bg-slate-50 border-b border-slate-100 last:border-0 transition-colors group"
                   >
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
+                      {/* UI DO DROPDOWN (Busca) COM SKU E BARCODE */}
+                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
                         <span className={`text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider ${item.type === 'product' ? 'bg-amber-100 text-amber-800' : 'bg-purple-100 text-purple-800'}`}>
                           {item.type === 'product' ? 'Produto' : 'Serviço'}
                         </span>
-                        {item.code && <span className="text-xs font-mono text-slate-400">{item.code}</span>}
+                        {item.sku && <span className="text-xs font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">SKU: {item.sku}</span>}
+                        {item.barcode && <span className="text-xs font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1"><Barcode className="w-3 h-3"/> {item.barcode}</span>}
                       </div>
                       <p className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors text-base">{item.name}</p>
                     </div>
-                    <span className="font-black text-slate-900 bg-slate-100 px-3 py-1.5 rounded-lg text-sm">
+                    <span className="font-black text-slate-900 bg-slate-100 px-3 py-1.5 rounded-lg text-sm shrink-0 ml-2">
                       {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </span>
                   </button>
@@ -561,7 +545,6 @@ export default function PDVPage() {
             )}
           </div>
 
-          {/* ÁREA DE SCROLL DOS ITENS (SCROLL INTERNO APENAS AQUI) */}
           <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-3 custom-scrollbar relative">
             {items.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
@@ -574,37 +557,46 @@ export default function PDVPage() {
               items.map((item) => (
                 <div key={item.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 md:p-5 bg-white rounded-[1.25rem] border border-slate-200/80 shadow-sm gap-4 hover:border-slate-300 transition-all group animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1.5">
+                    
+                    {/* UI DO CARRINHO COM SKU E BARCODE */}
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
                       <span className={`text-[10px] font-black tracking-wider px-2 py-0.5 rounded-md uppercase ${item.type === 'product' ? 'bg-slate-900 text-white' : 'bg-blue-600 text-white'}`}>
                         {item.type === 'product' ? 'Produto' : 'Serviço'}
                       </span>
-                      <span className="text-xs text-slate-400 font-mono">{item.code || 'sem SKU'}</span>
+                      {item.sku ? (
+                        <span className="text-xs text-slate-500 font-mono bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">SKU: {item.sku}</span>
+                      ) : item.type === 'product' && (
+                        <span className="text-xs text-slate-400 font-mono italic">sem SKU</span>
+                      )}
+                      {item.barcode && (
+                        <span className="text-xs text-slate-500 font-mono bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <Barcode className="w-3 h-3"/> {item.barcode}
+                        </span>
+                      )}
                     </div>
-                    <p className="font-black text-slate-900 text-lg leading-tight">{item.name}</p>
                     
-                    <div className="mt-2 flex flex-wrap gap-2 items-center">
+                    <p className="font-black text-slate-900 text-lg leading-tight mb-2">{item.name}</p>
+                    
+                    <div className="flex flex-wrap gap-2 items-center">
                       <p className="text-xs text-slate-500 font-medium bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
                         Un: {item.displayPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                       </p>
 
-                      {/* SELECT DO BARBEIRO NO ITEM */}
-                      {item.type === 'service' && (
-                        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2 py-0.5 rounded-md">
-                          <Scissors className="h-3.5 w-3.5 text-slate-400" />
-                          <select 
-                            value={item.barberId || ""} 
-                            onChange={(e) => updateItemBarber(item.id, e.target.value || null)}
-                            className="text-xs bg-transparent text-slate-700 py-1 font-bold focus:outline-none cursor-pointer max-w-[140px] truncate"
-                          >
-                            <option value="">Venda Direta (S/ Com.)</option>
-                            {staffMembers.map(staff => (
-                              <option key={staff.id} value={staff.id}>
-                                {staff.full_name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2 py-0.5 rounded-md">
+                        <Scissors className="h-3.5 w-3.5 text-slate-400" />
+                        <select 
+                          value={item.barberId || ""} 
+                          onChange={(e) => updateItemBarber(item.id, e.target.value || null)}
+                          className="text-xs bg-transparent text-slate-700 py-1 font-bold focus:outline-none cursor-pointer max-w-35 truncate"
+                        >
+                          <option value="">Venda Direta (S/ Com.)</option>
+                          {staffMembers.map(staff => (
+                            <option key={staff.id} value={staff.id}>
+                              {staff.full_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
                   
@@ -620,7 +612,7 @@ export default function PDVPage() {
                     </div>
 
                     <div className="flex items-center gap-4">
-                      <span className="font-black text-slate-900 text-xl min-w-[5rem] text-right">
+                      <span className="font-black text-slate-900 text-xl min-w-20 text-right">
                         {(item.displayPrice * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                       </span>
                       <Button variant="ghost" size="icon" className="text-slate-400 hover:text-red-500 hover:bg-red-50 h-10 w-10 rounded-xl shrink-0 transition-colors" onClick={() => removeItem(item.id)}>
@@ -634,8 +626,7 @@ export default function PDVPage() {
           </main>
         </div>
 
-        {/* COLUNA DIREITA (DESKTOP) - FIXA */}
-        <div className="hidden md:flex w-[400px] bg-white flex-col justify-between border-l border-slate-200/80 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-20 shrink-0 relative">
+        <div className="hidden md:flex w-100 bg-white flex-col justify-between border-l border-slate-200/80 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-20 shrink-0 relative">
           <div className="p-6 md:p-8 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
             
             <div>
@@ -690,7 +681,6 @@ export default function PDVPage() {
         </div>
       </div>
 
-      {/* PAINEL INFERIOR DA GAVETA (MOBILE APENAS) */}
       <div className="md:hidden shrink-0 p-4 bg-white border-t border-slate-200/80 shadow-[0_-4px_12px_rgba(0,0,0,0.03)] z-20">
         <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
           <SheetTrigger asChild>
@@ -751,7 +741,6 @@ export default function PDVPage() {
   );
 }
 
-// Componente simples para o badge (Contador de Pendentes)
 function Badge({ count }: { count: number }) {
   if (count === 0) return null;
   return (

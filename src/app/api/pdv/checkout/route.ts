@@ -50,21 +50,44 @@ export async function POST(req: Request) {
     let realTotalAmount = 0;
     const orderItemsToInsert = [];
     const ledgersToInsert = []; 
-    const stockMovementsToInsert = []; // <-- NOVO: Array para Event Sourcing de Estoque
+    const stockMovementsToInsert = []; 
 
     for (const item of parsed.data.items) {
       let unitPrice = 0;
       let commissionAmount = 0;
 
       if (item.type === "product") {
-        const { data: product, error: pError } = await supabase.from("products").select("price, stock_quantity, name").eq("id", item.id).eq("barbershop_id", member.barbershop_id).single();
+        // 1. Busca o produto com a nova coluna commission_percentage
+        const { data: product, error: pError } = await supabase
+          .from("products")
+          .select("price, stock_quantity, name, commission_percentage")
+          .eq("id", item.id)
+          .eq("barbershop_id", member.barbershop_id)
+          .single();
         
         if (pError || !product) return NextResponse.json({ error: `Produto inválido: ${item.id}` }, { status: 400 });
         if (product.stock_quantity < item.quantity) return NextResponse.json({ error: `Estoque insuficiente para o produto: ${product.name}` }, { status: 400 });
         
         unitPrice = product.price;
+        // CORREÇÃO AQUI: Utilizando const em vez de let, pois o valor não é reatribuído
+        const finalCommissionPercentage = product.commission_percentage || 0;
         
-        // NOVO PADRÃO: Delega a baixa para a tabela de movimentação e para a Trigger do banco!
+        // 2. Lógica de Comissão do Produto
+        if (item.barberId && finalCommissionPercentage > 0) {
+          commissionAmount = (unitPrice * item.quantity) * (finalCommissionPercentage / 100);
+          
+          ledgersToInsert.push({
+            barbershop_id: member.barbershop_id,
+            staff_id: item.barberId,
+            source_id: parsed.data.sourceId, 
+            source_type: parsed.data.sourceType, 
+            transaction_type: "commission_earned",
+            amount: commissionAmount,
+            description: `Comissão Produto - ${product.name}`
+          });
+        }
+        
+        // 3. Event Sourcing de Estoque
         stockMovementsToInsert.push({
           barbershop_id: member.barbershop_id,
           product_id: item.id,
@@ -74,9 +97,10 @@ export async function POST(req: Request) {
           created_by: user.id
         });
         
+        // 4. Insere o item da venda com a comissão do barbeiro (se houver)
         orderItemsToInsert.push({
           item_type: item.type, product_id: item.id, service_id: null,
-          quantity: item.quantity, unit_price: unitPrice, commission_amount: 0, barber_id: null
+          quantity: item.quantity, unit_price: unitPrice, commission_amount: commissionAmount, barber_id: item.barberId || null
         });
 
       } else if (item.type === "service") {
@@ -89,6 +113,8 @@ export async function POST(req: Request) {
         if (sError || !service) return NextResponse.json({ error: `Serviço inválido: ${item.id}` }, { status: 400 });
         
         unitPrice = service.price;
+        
+        // Aqui mantemos let porque ele pode ser reatribuído caso haja regra específica
         let finalCommissionPercentage = service.commission_percentage || 0;
 
         if (item.barberId) {
@@ -176,9 +202,9 @@ export async function POST(req: Request) {
       }
     }
 
-    // Atualiza o cache de todas as telas afetadas para que a UI reflita a mudança na hora
+    // Atualiza o cache de todas as telas afetadas
     revalidatePath("/dashboard/pdv");
-    revalidatePath("/dashboard/produtos"); // <-- ADICIONADO: Atualiza o painel de produtos na hora
+    revalidatePath("/dashboard/produtos");
     revalidatePath("/equipe/staff"); 
     revalidatePath("/fila");         
     revalidatePath("/agendamentos"); 
