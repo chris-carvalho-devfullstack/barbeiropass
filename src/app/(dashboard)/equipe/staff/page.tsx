@@ -16,6 +16,7 @@ import {
 
 import { EditStaffButton } from "@/components/edit-staff-button";
 import { StaffTabsClient } from "./staff-tabs-client";
+import { StaffPeriodFilter } from "./staff-period-filter";
 
 export const runtime = "edge";
 
@@ -69,6 +70,9 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   const supabase = await createClient();
   const resolvedParams = await searchParams;
   const targetStaffId = resolvedParams.id as string | undefined;
+  
+  // Pega o período da URL (padrão: hoje)
+  const period = (resolvedParams.period as string) || "hoje";
 
   // 1. Verificação de Identidade
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -111,7 +115,6 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
 
   const { data: staffData, error: staffError } = await staffQuery.single();
 
-  // Verifica se o profissional existe e pertence à mesma barbearia (prevenção contra IDOR)
   if (staffError || !staffData || (targetStaffId && staffData.barbershop_id !== memberData?.barbershop_id)) {
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center min-h-[50vh]">
@@ -151,7 +154,19 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   let totalGanho = 0;
 
   if (!isReceptionist && !isAdminOnly) {
-    // A. APENAS AGENDAMENTOS FUTUROS (Passado para o Client Component renderizar na aba)
+    // Cálculo do Filtro de Data para os Cards
+    const now = new Date();
+    let startDate: string | null = null;
+    
+    if (period === "hoje") {
+      startDate = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+    } else if (period === "semana") {
+      startDate = new Date(now.setDate(now.getDate() - 7)).toISOString();
+    } else if (period === "mes") {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    }
+
+    // A. APENAS AGENDAMENTOS FUTUROS
     const { data: appointmentsRaw } = await supabase
       .from("appointments")
       .select("id, scheduled_at, status, client_name, services (name, price)")
@@ -161,18 +176,23 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
 
     agendamentosAAtender = (appointmentsRaw as unknown as AppointmentData[]) || [];
 
-    // B. SOMA DE GANHOS (Apenas para exibir o card de resumo superior)
-    const { data: ledgerSummary } = await supabase
+    // B. SOMA DE GANHOS COM FILTRO DE DATA APLICADO E CONSIDERANDO AUDITORIAS
+    let ledgerQuery = supabase
       .from("staff_financial_ledgers")
       .select("amount, transaction_type")
       .eq("staff_id", staffData.id)
-      .eq("transaction_type", "commission_earned");
+      .in("transaction_type", ["commission_earned", "audit_adjustment"]);
       
+    if (startDate) {
+      ledgerQuery = ledgerQuery.gte("created_at", startDate);
+    }
+
+    const { data: ledgerSummary } = await ledgerQuery;
     const ledgers = (ledgerSummary as unknown as LedgerEntrySummary[]) || [];
     totalGanho = ledgers.reduce((acc, curr) => acc + Number(curr.amount), 0);
   }
 
-  // NODE DA AGENDA FUTURA (Montado no servidor para ser injetado no cliente)
+  // NODE DA AGENDA FUTURA
   const agendaNode = (
     <Card className="border-none shadow-sm bg-background">
       <CardHeader className="px-4 sm:px-6">
@@ -232,7 +252,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   return (
     <div className="flex flex-col space-y-6 p-4 md:p-8 pt-6 max-w-7xl mx-auto w-full">
       
-      {/* HEADER: INFORMAÇÕES DO STAFF */}
+      {/* HEADER: INFORMAÇÕES DO STAFF E FILTRO */}
       <div className="flex flex-col space-y-4 md:flex-row md:justify-between md:items-center md:space-y-0 border-b pb-6">
         <div>
           {isManagerLogged && !isViewingOwnProfile && (
@@ -253,13 +273,16 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          {/* O novo filtro dinâmico aparece aqui no cabeçalho */}
+          {!isReceptionist && !isAdminOnly && <StaffPeriodFilter />}
+
           {!isReceptionist && !isAdminOnly && (
-            <div className="flex items-center gap-3 bg-muted/50 p-3 rounded-xl border border-border/60">
+            <div className="flex items-center gap-3 bg-muted/50 p-2 sm:p-3 rounded-xl border border-border/60">
               <div className="p-2 bg-background rounded-lg border shadow-sm">
                 <Armchair className="h-5 w-5 text-primary" />
               </div>
-              <div>
+              <div className="pr-2">
                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Bancada</p>
                 <p className="text-sm font-bold text-foreground">
                   {staffWorkStation ? staffWorkStation.name : "Nenhuma Atribuída"}
@@ -342,18 +365,22 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
             <Card className="shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pt-5">
                 <CardTitle className="text-sm font-medium tracking-wide">Comissões Acumuladas</CardTitle>
-                <DollarSign className="h-4 w-4 text-emerald-500" />
+                <DollarSign className={`h-4 w-4 ${totalGanho < 0 ? 'text-rose-500' : 'text-emerald-500'}`} />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">R$ {totalGanho.toFixed(2)}</div>
-                <p className="text-xs text-muted-foreground mt-0.5">Total bruto distribuído</p>
+                <div className={`text-2xl font-bold ${totalGanho < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  R$ {totalGanho.toFixed(2)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {period === "hoje" ? "Total ganho hoje" : period === "semana" ? "Total ganho na semana" : period === "mes" ? "Total ganho no mês" : "Total bruto histórico"}
+                </p>
               </CardContent>
             </Card>
 
             <Card className="shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pt-5">
-                <CardTitle className="text-sm font-medium tracking-wide">Retenções contratuais</CardTitle>
-                <TrendingUp className="h-4 w-4 text-rose-500" />
+                <CardTitle className="text-sm font-medium tracking-wide">Comissionamento</CardTitle>
+                <TrendingUp className="h-4 w-4 text-primary" />
               </CardHeader>
               <CardContent>
                 {staffData.payment_model === "fixed_fee" ? (
@@ -369,7 +396,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
                       {uniformPercentageValue}%
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5 font-medium">
-                      Para <span className="underline decoration-emerald-200">todos</span> os serviços
+                      Para todos os serviços
                     </p>
                   </>
                 ) : (
@@ -408,7 +435,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
             </Card>
           </div>
 
-          {/* AS ABAS INTERATIVAS (O componente cliente que criamos) */}
+          {/* AS ABAS INTERATIVAS */}
           <StaffTabsClient 
             staffId={staffData.id} 
             isManager={isManagerLogged} 
