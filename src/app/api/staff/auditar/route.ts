@@ -34,7 +34,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "O novo valor deve ser diferente do atual." }, { status: 400 });
     }
 
-    const ipAddress = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "Desconhecido";
+    // 1. Prioriza o cabeçalho de IP real da Cloudflare, depois os proxies padrão
+let ipAddress = req.headers.get("cf-connecting-ip") || 
+                req.headers.get("x-forwarded-for") || 
+                req.headers.get("x-real-ip") || 
+                "Desconhecido";
+
+// 2. Se a requisição vier de múltiplos proxies, pega o primeiro IP da lista
+if (ipAddress.includes(",")) {
+  ipAddress = ipAddress.split(",")[0].trim();
+}
+
+// 3. Amortece o formato visual quando estiver testando em ambiente local (Localhost)
+if (ipAddress === "::1" || ipAddress === "127.0.0.1") {
+  ipAddress = "127.0.0.1 (Localhost)";
+}
 
     // 1. Tentar inserir no extrato
     console.log("⏳ Inserindo ajuste no staff_financial_ledgers...");

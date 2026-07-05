@@ -1,6 +1,9 @@
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
+import { ptBR } from "date-fns/locale";
+
 import { 
   Card, CardContent, CardDescription, CardHeader, CardTitle 
 } from "@/components/ui/card";
@@ -71,8 +74,9 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   const resolvedParams = await searchParams;
   const targetStaffId = resolvedParams.id as string | undefined;
   
-  // Pega o período da URL (padrão: hoje)
   const period = (resolvedParams.period as string) || "hoje";
+  const fromParam = resolvedParams.from as string | undefined;
+  const toParam = resolvedParams.to as string | undefined;
 
   // 1. Verificação de Identidade
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -152,18 +156,39 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   // Variáveis para Resumo
   let agendamentosAAtender: AppointmentData[] = [];
   let totalGanho = 0;
+  let cardSubtitleText = "Total bruto histórico";
 
   if (!isReceptionist && !isAdminOnly) {
-    // Cálculo do Filtro de Data para os Cards
     const now = new Date();
     let startDate: string | null = null;
+    let endDate: string | null = null;
     
+    // Lógica Dinâmica de Datas para os Cards baseada no date-fns
     if (period === "hoje") {
-      startDate = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+      startDate = startOfDay(now).toISOString();
+      endDate = endOfDay(now).toISOString();
+      cardSubtitleText = "Total ganho hoje";
     } else if (period === "semana") {
-      startDate = new Date(now.setDate(now.getDate() - 7)).toISOString();
+      const start = startOfWeek(now, { weekStartsOn: 0 }); // Domingo a Sábado
+      const end = endOfWeek(now, { weekStartsOn: 0 });
+      startDate = start.toISOString();
+      endDate = end.toISOString();
+      cardSubtitleText = `Total ganho (${format(start, "dd/MM/yy")} a ${format(end, "dd/MM/yy")})`;
     } else if (period === "mes") {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const start = startOfMonth(now);
+      const end = endOfMonth(now);
+      startDate = start.toISOString();
+      endDate = end.toISOString();
+      const nomeMes = format(start, "MMMM", { locale: ptBR });
+      cardSubtitleText = `Total ganho em ${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}`;
+    } else if (period === "personalizado" && fromParam && toParam) {
+      const start = new Date(fromParam);
+      const end = new Date(toParam);
+      startDate = startOfDay(start).toISOString();
+      endDate = endOfDay(end).toISOString();
+      cardSubtitleText = `Total ganho (${format(start, "dd/MM/yy")} a ${format(end, "dd/MM/yy")})`;
+    } else if (period === "personalizado") {
+      cardSubtitleText = "Selecione as datas...";
     }
 
     // A. APENAS AGENDAMENTOS FUTUROS
@@ -176,16 +201,15 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
 
     agendamentosAAtender = (appointmentsRaw as unknown as AppointmentData[]) || [];
 
-    // B. SOMA DE GANHOS COM FILTRO DE DATA APLICADO E CONSIDERANDO AUDITORIAS
+    // B. SOMA DE GANHOS COM FILTRO DE DATA APLICADO
     let ledgerQuery = supabase
       .from("staff_financial_ledgers")
       .select("amount, transaction_type")
       .eq("staff_id", staffData.id)
       .in("transaction_type", ["commission_earned", "audit_adjustment"]);
       
-    if (startDate) {
-      ledgerQuery = ledgerQuery.gte("created_at", startDate);
-    }
+    if (startDate) ledgerQuery = ledgerQuery.gte("created_at", startDate);
+    if (endDate) ledgerQuery = ledgerQuery.lte("created_at", endDate);
 
     const { data: ledgerSummary } = await ledgerQuery;
     const ledgers = (ledgerSummary as unknown as LedgerEntrySummary[]) || [];
@@ -252,9 +276,9 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
   return (
     <div className="flex flex-col space-y-6 p-4 md:p-8 pt-6 max-w-7xl mx-auto w-full">
       
-      {/* HEADER: INFORMAÇÕES DO STAFF E FILTRO */}
-      <div className="flex flex-col space-y-4 md:flex-row md:justify-between md:items-center md:space-y-0 border-b pb-6">
-        <div>
+      {/* HEADER: INFORMAÇÕES DO STAFF E BARRA DE FERRAMENTAS */}
+      <div className="flex flex-col space-y-4 lg:flex-row lg:justify-between lg:items-start lg:space-y-0 border-b pb-6">
+        <div className="shrink-0">
           {isManagerLogged && !isViewingOwnProfile && (
             <Link href="/equipe" className="text-xs text-muted-foreground flex items-center mb-2 hover:text-primary transition-colors">
               <ArrowLeft className="mr-1 h-3 w-3" /> Voltar para a gestão
@@ -264,7 +288,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
             <h2 className="text-2xl font-bold tracking-tight">
               {isViewingOwnProfile ? `Olá, ${staffData.full_name}` : `Painel de ${staffData.full_name}`}
             </h2>
-            <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+            <Badge variant="secondary" className="bg-slate-100 text-slate-700 hidden sm:flex">
               {roleLabels[staffData.role] || "Profissional"}
             </Badge>
           </div>
@@ -273,24 +297,32 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-center gap-3">
-          {/* O novo filtro dinâmico aparece aqui no cabeçalho */}
-          {!isReceptionist && !isAdminOnly && <StaffPeriodFilter />}
-
+        {/* NOVA BARRA DE FERRAMENTAS: LINHA ÚNICA RESPONSIVA (CARROSSEL NO MOBILE) */}
+        <div className="flex flex-row items-center gap-2 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          
+          {/* 1. Bancada */}
           {!isReceptionist && !isAdminOnly && (
-            <div className="flex items-center gap-3 bg-muted/50 p-2 sm:p-3 rounded-xl border border-border/60">
-              <div className="p-2 bg-background rounded-lg border shadow-sm">
-                <Armchair className="h-5 w-5 text-primary" />
-              </div>
-              <div className="pr-2">
-                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Bancada</p>
-                <p className="text-sm font-bold text-foreground">
-                  {staffWorkStation ? staffWorkStation.name : "Nenhuma Atribuída"}
-                </p>
-              </div>
+            <div className="flex items-center gap-2 bg-muted/40 border border-border text-foreground px-3 h-10 rounded-md shadow-sm shrink-0">
+              <Armchair className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm font-medium whitespace-nowrap">
+                {staffWorkStation ? staffWorkStation.name : "Sem bancada"}
+              </span>
             </div>
           )}
-          {isManagerLogged && <EditStaffButton staffId={staffData.id} />}
+
+          {/* 2. Filtro de Período */}
+          {!isReceptionist && !isAdminOnly && (
+            <div className="shrink-0">
+              <StaffPeriodFilter />
+            </div>
+          )}
+
+          {/* 3. Configurar Contrato */}
+          {isManagerLogged && (
+            <div className="shrink-0">
+              <EditStaffButton staffId={staffData.id} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -362,6 +394,8 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
         <>
           {/* CARDS DE RESUMO SUPERIOR */}
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+            
+            {/* CARD 1: Comissões */}
             <Card className="shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pt-5">
                 <CardTitle className="text-sm font-medium tracking-wide">Comissões Acumuladas</CardTitle>
@@ -372,11 +406,12 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
                   R$ {totalGanho.toFixed(2)}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {period === "hoje" ? "Total ganho hoje" : period === "semana" ? "Total ganho na semana" : period === "mes" ? "Total ganho no mês" : "Total bruto histórico"}
+                  {cardSubtitleText}
                 </p>
               </CardContent>
             </Card>
 
+            {/* CARD 2: Comissionamento */}
             <Card className="shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pt-5">
                 <CardTitle className="text-sm font-medium tracking-wide">Comissionamento</CardTitle>
@@ -423,6 +458,7 @@ export default async function StaffDashboardPage({ searchParams }: PageProps) {
               </CardContent>
             </Card>
 
+            {/* CARD 3: Próximos Serviços */}
             <Card className="shadow-sm sm:col-span-2 lg:col-span-1">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pt-5">
                 <CardTitle className="text-sm font-medium tracking-wide">Próximos Serviços</CardTitle>
