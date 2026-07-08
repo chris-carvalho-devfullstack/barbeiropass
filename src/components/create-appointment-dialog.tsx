@@ -1,13 +1,12 @@
 // src/components/create-appointment-dialog.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, CalendarClock, Check, ChevronsUpDown } from "lucide-react";
+import { Loader2, CalendarClock, Check, ChevronsUpDown, Scissors, Clock } from "lucide-react";
 import { toast } from "sonner";
-import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -17,30 +16,49 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
+// 1. Zod puro: Sem o .default([]) para não quebrar a inferência de Input vs Output no React Hook Form
 const formSchema = z.object({
   client_name: z.string().min(3, "Nome muito curto"),
   client_phone: z.string().optional(),
   scheduled_at: z.string().min(10, "Data e hora são obrigatórios"),
+  barber_id: z.string().optional(),
+  service_ids: z.array(z.string()), 
 });
 
-// Tipagem segura baseada na nossa tabela 'clientes'
+// Extraímos o tipo explicitamente para garantir que o useForm use exatamente este formato
+type AppointmentFormValues = z.infer<typeof formSchema>;
+
+// Tipagens Seguras
 interface SugestaoCliente {
   id: string;
   name: string;
   phone: string | null;
+}
+
+interface BarberOption {
+  id: string;
+  name: string;
+  role: string;
+}
+
+interface ServiceOption {
+  id: string;
+  name: string;
+  duration_minutes: number;
+  price: number;
+}
+
+interface OptionsData {
+  isManager: boolean;
+  currentUserId: string;
+  barbers: BarberOption[];
+  services: ServiceOption[];
 }
 
 export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmentCreated: () => void }) {
@@ -49,15 +67,38 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sugestoes, setSugestoes] = useState<SugestaoCliente[]>([]);
-  
-  const supabase = createClient();
+  const [options, setOptions] = useState<OptionsData | null>(null);
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  // 2. Passamos o tipo extraído (AppointmentFormValues) e definimos os defaults estritos aqui
+  const form = useForm<AppointmentFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { client_name: "", client_phone: "", scheduled_at: "" },
+    defaultValues: { 
+      client_name: "", 
+      client_phone: "", 
+      scheduled_at: "", 
+      service_ids: [], 
+      barber_id: "" 
+    },
   });
 
-  // Busca preditiva de clientes no banco (CORRIGIDO PARA 'clientes' e 'name')
+  // Carrega opções de staff e serviços ao abrir o modal
+  useEffect(() => {
+    if (open && !options) {
+      fetch("/api/agendamentos/opcoes")
+        .then(res => res.json())
+        .then(res => {
+          if (res.data) {
+            setOptions(res.data as OptionsData);
+            if (!res.data.isManager) {
+              form.setValue("barber_id", res.data.currentUserId);
+            }
+          }
+        })
+        .catch(err => console.error("Erro ao carregar opções:", err));
+    }
+  }, [open, options, form]);
+
+  // Busca Preditiva de Clientes
   useEffect(() => {
     const buscarClientes = async () => {
       if (searchTerm.trim().length < 2) {
@@ -65,61 +106,79 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
         return;
       }
 
-      // IMPORTANTE: Aqui usamos 'clientes' (tabela) e 'name' (coluna)
-      const { data, error } = await supabase
-        .from("clientes")
-        .select("id, name, phone")
-        .ilike("name", `%${searchTerm}%`)
-        .limit(5);
-
-      if (!error && data) {
-        setSugestoes(data as SugestaoCliente[]);
-      } else if (error) {
-        console.error("Erro na busca:", error.message);
+      try {
+        const res = await fetch(`/api/clientes/search?q=${encodeURIComponent(searchTerm)}`);
+        const result = await res.json();
+        
+        if (res.ok && result.data) {
+          setSugestoes(result.data as SugestaoCliente[]);
+        }
+      } catch (error: unknown) {
+        console.error("Erro na busca de clientes:", error);
       }
     };
 
     const timer = setTimeout(buscarClientes, 300);
     return () => clearTimeout(timer);
-  }, [searchTerm, supabase]);
+  }, [searchTerm]);
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
+  const selectedServiceIds = form.watch("service_ids");
+  
+  // Cálculo em tempo real de duração e preço
+  const totais = useMemo(() => {
+    if (!options) return { tempo: 0, preco: 0 };
+    return selectedServiceIds.reduce((acc, id) => {
+      const s = options.services.find(x => x.id === id);
+      return s ? { tempo: acc.tempo + s.duration_minutes, preco: acc.preco + s.price } : acc;
+    }, { tempo: 0, preco: 0 });
+  }, [selectedServiceIds, options]);
+
+  // 3. Tipagem estrita no Submit baseada no FormValues
+  async function onSubmit(values: AppointmentFormValues) {
     setIsSubmitting(true);
     const toastId = toast.loading("Agendando horário...");
 
+    const tempoCalculado = totais.tempo > 0 ? totais.tempo : 30;
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Não autorizado");
-
-      const { data: member } = await supabase
-        .from("barbershop_members")
-        .select("barbershop_id")
-        .eq("profile_id", user.id)
-        .single();
-
-      // Grava na tabela de agendamentos 'appointments'
-      const { error } = await supabase.from("appointments").insert({
-        barbershop_id: member?.barbershop_id,
-        barber_id: user.id,
-        client_name: values.client_name,
-        client_phone: values.client_phone || null,
-        scheduled_at: new Date(values.scheduled_at).toISOString(),
-        status: "scheduled"
+      const response = await fetch("/api/agendamentos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_name: values.client_name,
+          client_phone: values.client_phone || null,
+          scheduled_at: new Date(values.scheduled_at).toISOString(),
+          barber_id: values.barber_id || options?.currentUserId,
+          service_ids: values.service_ids,
+          duration_minutes: tempoCalculado, 
+        }),
       });
 
-      if (error) throw new Error(error.message);
+      const result = await response.json();
 
-      toast.success("Agendamento criado!", { id: toastId });
+      if (!response.ok) {
+        throw new Error(result.error || "Falha ao gravar agendamento.");
+      }
+
+      toast.success("Agendamento criado com sucesso!", { id: toastId });
       form.reset();
+      setSearchTerm("");
+      setSugestoes([]);
       setOpen(false);
       onAppointmentCreated();
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Erro ao salvar";
-      toast.error(`Falha: ${msg}`, { id: toastId });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        toast.error(`Atenção: ${error.message}`, { id: toastId });
+      }
     } finally {
       setIsSubmitting(false);
     }
   }
+
+  const toggleService = (id: string) => {
+    const atual = form.getValues("service_ids");
+    form.setValue("service_ids", atual.includes(id) ? atual.filter(x => x !== id) : [...atual, id]);
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -129,17 +188,41 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-md bg-white border-none shadow-2xl rounded-3xl">
+      <DialogContent className="sm:max-w-md bg-white border-none shadow-2xl rounded-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-2xl font-black text-slate-900">Agendar Cliente</DialogTitle>
           <DialogDescription className="text-slate-500">
-            Busque um cliente cadastrado ou digite um novo.
+            Configure os serviços e o tempo estimado.
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-4">
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
             
+            {/* Seletor de Barbeiro (Apenas para Gerentes/Owners) */}
+            {options?.isManager && (
+              <FormField control={form.control} name="barber_id" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="font-bold text-slate-700">Barbeiro</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl>
+                      <SelectTrigger className="bg-slate-50 border-slate-200 h-12 rounded-xl">
+                        <SelectValue placeholder="Selecione para qual barbeiro agendar" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {options.barbers.map(b => (
+                        <SelectItem key={b.id} value={b.id} className="font-bold text-slate-800">
+                          {b.name} <span className="text-slate-400 font-normal text-xs ml-2">({b.role})</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}/>
+            )}
+
             <FormField
               control={form.control}
               name="client_name"
@@ -162,7 +245,8 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
                         </Button>
                       </FormControl>
                     </PopoverTrigger>
-                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
+                    {/* Atualização sugerida do Tailwind: w-(--radix-popover-trigger-width) */}
+                    <PopoverContent className="w-(--radix-popover-trigger-width) p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
                       <Command shouldFilter={false}>
                         <CommandInput 
                           placeholder="Pesquise por nome..." 
@@ -232,6 +316,50 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
                   </FormItem>
                 )}
               />
+            </div>
+
+            {/* SELEÇÃO MÚLTIPLA DE SERVIÇOS */}
+            {options && options.services.length > 0 && (
+              <div className="pt-2">
+                <FormLabel className="font-bold text-slate-700 mb-2 block">Serviços do Atendimento</FormLabel>
+                <div className="grid grid-cols-2 gap-2 max-h-[160px] overflow-y-auto pr-1">
+                  {options.services.map(servico => {
+                    const isSelected = selectedServiceIds.includes(servico.id);
+                    return (
+                      <div 
+                        key={servico.id} onClick={() => toggleService(servico.id)}
+                        className={cn("border rounded-xl p-3 cursor-pointer transition-all flex flex-col gap-1", isSelected ? "bg-blue-50 border-blue-600 shadow-sm" : "bg-white border-slate-200 hover:border-slate-300")}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className={cn("font-bold text-sm leading-tight", isSelected ? "text-blue-900" : "text-slate-700")}>{servico.name}</span>
+                          {isSelected && <Check className="size-4 text-blue-600 shrink-0" />}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                          <span>{servico.duration_minutes} min</span>
+                          <span>•</span>
+                          <span className={cn(isSelected && "text-blue-700")}>{servico.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* PAINEL DE RESUMO */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Estimado</p>
+                <p className="text-2xl font-black text-slate-900">{totais.preco.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+              </div>
+              <div className="flex gap-2">
+                <Badge variant="outline" className="bg-white text-slate-600 border-slate-200 shadow-sm px-3 py-1 text-sm h-9">
+                  <Scissors className="size-4 mr-2" /> {selectedServiceIds.length} Itens
+                </Badge>
+                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 shadow-sm px-3 py-1 text-sm h-9">
+                  <Clock className="size-4 mr-2" /> {totais.tempo > 0 ? totais.tempo : 30} min
+                </Badge>
+              </div>
             </div>
 
             <DialogFooter className="pt-4 border-t border-slate-100">
