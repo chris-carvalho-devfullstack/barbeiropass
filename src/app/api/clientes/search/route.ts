@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { z } from "zod";
 
+export const runtime = 'edge';
+
 // Validação rigorosa do parâmetro de pesquisa via Query String
 const searchSchema = z.object({
   q: z.string().min(2, "O termo de pesquisa deve ter pelo menos 2 caracteres."),

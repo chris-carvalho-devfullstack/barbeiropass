@@ -22,7 +22,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
-// 1. Zod puro: Sem o .default([]) para não quebrar a inferência de Input vs Output no React Hook Form
 const formSchema = z.object({
   client_name: z.string().min(3, "Nome muito curto"),
   client_phone: z.string().optional(),
@@ -31,10 +30,8 @@ const formSchema = z.object({
   service_ids: z.array(z.string()), 
 });
 
-// Extraímos o tipo explicitamente para garantir que o useForm use exatamente este formato
 type AppointmentFormValues = z.infer<typeof formSchema>;
 
-// Tipagens Seguras
 interface SugestaoCliente {
   id: string;
   name: string;
@@ -61,6 +58,16 @@ interface OptionsData {
   services: ServiceOption[];
 }
 
+// Utilitário para traduzir o cargo no visual
+const traduzirCargo = (role: string) => {
+  const cargos: Record<string, string> = {
+    barber: 'Barbeiro',
+    manager: 'Gerente',
+    owner: 'Dono',
+  };
+  return cargos[role] || role;
+};
+
 export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmentCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -69,7 +76,6 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
   const [sugestoes, setSugestoes] = useState<SugestaoCliente[]>([]);
   const [options, setOptions] = useState<OptionsData | null>(null);
 
-  // 2. Passamos o tipo extraído (AppointmentFormValues) e definimos os defaults estritos aqui
   const form = useForm<AppointmentFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { 
@@ -81,7 +87,6 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
     },
   });
 
-  // Carrega opções de staff e serviços ao abrir o modal
   useEffect(() => {
     if (open && !options) {
       fetch("/api/agendamentos/opcoes")
@@ -89,16 +94,15 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
         .then(res => {
           if (res.data) {
             setOptions(res.data as OptionsData);
-            if (!res.data.isManager) {
-              form.setValue("barber_id", res.data.currentUserId);
-            }
+            // CORREÇÃO 1: Sempre preenche o valor padrão com o ID do usuário logado, 
+            // mesmo que ele seja o dono. Isso garante que o Select não inicie "quebrado".
+            form.setValue("barber_id", res.data.currentUserId);
           }
         })
         .catch(err => console.error("Erro ao carregar opções:", err));
     }
   }, [open, options, form]);
 
-  // Busca Preditiva de Clientes
   useEffect(() => {
     const buscarClientes = async () => {
       if (searchTerm.trim().length < 2) {
@@ -124,7 +128,6 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
 
   const selectedServiceIds = form.watch("service_ids");
   
-  // Cálculo em tempo real de duração e preço
   const totais = useMemo(() => {
     if (!options) return { tempo: 0, preco: 0 };
     return selectedServiceIds.reduce((acc, id) => {
@@ -133,7 +136,6 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
     }, { tempo: 0, preco: 0 });
   }, [selectedServiceIds, options]);
 
-  // 3. Tipagem estrita no Submit baseada no FormValues
   async function onSubmit(values: AppointmentFormValues) {
     setIsSubmitting(true);
     const toastId = toast.loading("Agendando horário...");
@@ -199,21 +201,22 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
             
-            {/* Seletor de Barbeiro (Apenas para Gerentes/Owners) */}
+            {/* Seletor de Barbeiro */}
             {options?.isManager && (
               <FormField control={form.control} name="barber_id" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="font-bold text-slate-700">Barbeiro</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <FormLabel className="font-bold text-slate-700">Profissional</FormLabel>
+                  {/* CORREÇÃO 2: Substituído defaultValue por value={field.value} para controle total */}
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
                       <SelectTrigger className="bg-slate-50 border-slate-200 h-12 rounded-xl">
-                        <SelectValue placeholder="Selecione para qual barbeiro agendar" />
+                        <SelectValue placeholder="Selecione o profissional" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {options.barbers.map(b => (
                         <SelectItem key={b.id} value={b.id} className="font-bold text-slate-800">
-                          {b.name} <span className="text-slate-400 font-normal text-xs ml-2">({b.role})</span>
+                          {b.name} <span className="text-slate-400 font-normal text-xs ml-2">({traduzirCargo(b.role)})</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -245,8 +248,7 @@ export function CreateAppointmentDialog({ onAppointmentCreated }: { onAppointmen
                         </Button>
                       </FormControl>
                     </PopoverTrigger>
-                    {/* Atualização sugerida do Tailwind: w-(--radix-popover-trigger-width) */}
-                    <PopoverContent className="w-(--radix-popover-trigger-width) p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
+                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
                       <Command shouldFilter={false}>
                         <CommandInput 
                           placeholder="Pesquise por nome..." 

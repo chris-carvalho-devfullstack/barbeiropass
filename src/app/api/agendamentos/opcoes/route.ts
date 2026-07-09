@@ -2,10 +2,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
+export const runtime = 'edge';
+
 // Tipagem rigorosa para o retorno do Join do Supabase
 interface StaffMemberData {
   id: string; // Agora referenciamos o ID da tabela staff
   role: string;
+  full_name: string | null; // ADICIONADO: Nome salvo diretamente na tabela staff
   profiles: {
     full_name: string | null;
   } | {
@@ -45,10 +48,10 @@ export async function GET() {
       .single();
 
     // 3. Buscar a Equipe (Barbeiros) na tabela STAFF
-    // CORRIGIDO: Puxar o full_name diretamente da tabela profiles aninhada
+    // CORRIGIDO: Puxar também o full_name diretamente da tabela staff
     const { data: staffData, error: staffError } = await supabase
       .from("staff")
-      .select("id, role, profiles ( full_name )")
+      .select("id, role, full_name, profiles ( full_name )")
       .eq("barbershop_id", member.barbershop_id)
       .in("role", ["owner", "manager", "barber"]);
 
@@ -65,7 +68,8 @@ export async function GET() {
       
       return {
         id: s.id, 
-        name: profileInfo?.full_name || "Membro sem nome",
+        // LÓGICA DE FALLBACK: Tenta profile, se não tiver, usa o nome do staff
+        name: profileInfo?.full_name || s.full_name || "Membro sem nome",
         role: s.role
       };
     }) || [];

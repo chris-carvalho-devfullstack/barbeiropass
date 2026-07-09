@@ -1,11 +1,12 @@
 // src/app/(dashboard)/agendamentos/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { 
   Calendar, Loader2, CheckCircle, XCircle, Clock, 
   Scissors, Wallet, LayoutList, CalendarDays, 
-  ChevronLeft, ChevronRight, CalendarRange, Calendar as CalendarIconMonth
+  ChevronLeft, ChevronRight, CalendarRange, Calendar as CalendarIconMonth,
+  UserCircle2
 } from "lucide-react";
 import { toast } from "sonner";
 import { 
@@ -21,6 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CreateAppointmentDialog } from "@/components/create-appointment-dialog";
+import { AppointmentDetailsDialog } from "@/components/appointment-details-dialog";
 import { cn } from "@/lib/utils";
 
 type AppointmentData = {
@@ -30,6 +32,10 @@ type AppointmentData = {
   client_name: string;
   client_phone: string | null;
   services: { name: string; price: number; duration_minutes: number; } | null;
+  staff: {
+    full_name: string | null; 
+    profiles: { full_name: string | null } | { full_name: string | null }[] | null 
+  } | null;
 };
 
 type ViewMode = "day" | "week" | "month" | "list";
@@ -39,6 +45,10 @@ export default function AgendamentosPage() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedAppointment, setSelectedAppointment] = useState<AppointmentData | null>(null);
+  
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  const currentHourRef = useRef<HTMLDivElement | null>(null);
 
   const fetchAgendamentos = useCallback(async () => {
     setLoading(true);
@@ -46,7 +56,12 @@ export default function AgendamentosPage() {
       const response = await fetch("/api/agendamentos");
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Erro ao buscar agendamentos.");
-      setAgendamentos(result.data as AppointmentData[]);
+      
+      const sortedData = (result.data as AppointmentData[]).sort((a, b) => {
+        return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime();
+      });
+      
+      setAgendamentos(sortedData);
     } catch (error: unknown) {
       if (error instanceof Error) toast.error(error.message);
     } finally {
@@ -58,34 +73,31 @@ export default function AgendamentosPage() {
     fetchAgendamentos();
   }, [fetchAgendamentos]);
 
-  async function updateStatus(id: string, novoStatus: AppointmentData["status"]) {
-    const toastId = toast.loading("A atualizar estado...");
-    try {
-      const response = await fetch(`/api/agendamentos/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: novoStatus }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Falha ao atualizar");
-      toast.success("Estado atualizado com sucesso!", { id: toastId });
-      fetchAgendamentos(); 
-    } catch (error: unknown) {
-      if (error instanceof Error) toast.error(error.message, { id: toastId });
-    }
-  }
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
-  // --- Lógica de Navegação Baseada na Visão ---
+  useEffect(() => {
+    if (isToday(selectedDate) && (viewMode === "day" || viewMode === "week")) {
+      setTimeout(() => {
+        currentHourRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 300);
+    }
+  }, [selectedDate, viewMode, loading]);
+
   const handlePrev = () => {
     if (viewMode === "day") setSelectedDate(subDays(selectedDate, 1));
     if (viewMode === "week") setSelectedDate(subWeeks(selectedDate, 1));
     if (viewMode === "month") setSelectedDate(subMonths(selectedDate, 1));
   };
+  
   const handleNext = () => {
     if (viewMode === "day") setSelectedDate(addDays(selectedDate, 1));
     if (viewMode === "week") setSelectedDate(addWeeks(selectedDate, 1));
     if (viewMode === "month") setSelectedDate(addMonths(selectedDate, 1));
   };
+  
   const handleToday = () => setSelectedDate(new Date());
 
   const formatarDataHora = (isoString: string) => {
@@ -106,9 +118,13 @@ export default function AgendamentosPage() {
     }
   };
 
-  const horasComerciais = Array.from({ length: 13 }, (_, i) => i + 8);
+  const getBarberName = (staff: AppointmentData["staff"]) => {
+    if (!staff || !staff.profiles) return "Não atribuído";
+    const profile = Array.isArray(staff.profiles) ? staff.profiles[0] : staff.profiles;
+    return profile?.full_name || staff.full_name || "Não atribuído";
+  };
 
-  // --- RENDERIZADORES DE VISÃO ---
+  const horasDoDia = Array.from({ length: 24 }, (_, i) => i);
 
   const renderControlesDeNavegacao = () => {
     let titulo = "";
@@ -134,20 +150,46 @@ export default function AgendamentosPage() {
 
   const renderVisaoDia = () => {
     const agendamentosDoDia = agendamentos.filter((ag) => isSameDay(new Date(ag.scheduled_at), selectedDate));
+    
     return (
-      <div className="relative min-h-[600px] overflow-y-auto p-4 sm:p-6 bg-slate-50/30">
-        {horasComerciais.map((hora) => {
+      <div className="relative min-h-150 overflow-y-auto p-4 sm:p-6 bg-slate-50/30">
+        {horasDoDia.map((hora) => {
           const agendamentosNestaHora = agendamentosDoDia.filter(ag => new Date(ag.scheduled_at).getHours() === hora);
+          const isCurrentHour = isToday(selectedDate) && currentTime.getHours() === hora;
+          const minutosPorcentagem = (currentTime.getMinutes() / 60) * 100;
+
           return (
-            <div key={hora} className="relative flex min-h-[80px] border-b border-slate-200/60 last:border-0">
-              <div className="w-16 flex-shrink-0 text-right pr-4 pt-2">
-                <span className="text-sm font-bold text-slate-400">{hora.toString().padStart(2, '0')}:00</span>
+            <div 
+              key={hora} 
+              ref={isCurrentHour ? currentHourRef : null}
+              className="relative flex min-h-20 border-b border-slate-200/60 last:border-0"
+            >
+              <div className="w-16 shrink-0 text-right pr-4 pt-2">
+                <span className={cn("text-sm font-bold", isCurrentHour ? "text-red-500" : "text-slate-400")}>
+                  {hora.toString().padStart(2, '0')}:00
+                </span>
               </div>
+              
               <div className="relative flex-1 bg-white/50 border-l border-slate-200/60 group hover:bg-white transition-colors">
+                
+                {isCurrentHour && (
+                  <div 
+                    className="absolute left-0 right-0 z-10 flex items-center pointer-events-none"
+                    style={{ top: `${minutosPorcentagem}%`, transform: 'translateY(-50%)' }}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 shadow-sm shadow-red-500/50"></div>
+                    <div className="h-0.5 w-full bg-red-500/60"></div>
+                  </div>
+                )}
+
                 {agendamentosNestaHora.map((ag) => {
                   const minutos = new Date(ag.scheduled_at).getMinutes();
                   return (
-                    <div key={ag.id} className="m-2 p-3 rounded-xl border border-blue-100 bg-blue-50/50 hover:bg-blue-50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                    <div 
+                      key={ag.id} 
+                      onClick={() => setSelectedAppointment(ag)}
+                      className="m-2 p-3 rounded-xl border border-blue-100 bg-blue-50/50 hover:bg-blue-50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm cursor-pointer relative z-20"
+                    >
                       <div className="flex items-start gap-3">
                         <div className="bg-white p-2 rounded-lg shadow-sm border border-slate-100 mt-1 sm:mt-0">
                           <span className="text-sm font-black text-blue-700">{hora.toString().padStart(2, '0')}:{minutos.toString().padStart(2, '0')}</span>
@@ -155,8 +197,12 @@ export default function AgendamentosPage() {
                         <div>
                           <p className="font-bold text-slate-800">{ag.client_name}</p>
                           <div className="flex items-center gap-2 mt-1 text-sm text-slate-500 font-medium">
-                            <span className="truncate max-w-[120px] sm:max-w-xs">{ag.services?.name || "Serviço Avulso"}</span>
+                            <span className="truncate max-w-30 sm:max-w-xs">{ag.services?.name || "Serviço Avulso"}</span>
                             <span>•</span><span>{ag.services?.duration_minutes || 30} min</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-600 font-medium bg-white w-fit px-2 py-0.5 rounded-md border border-slate-200 shadow-sm">
+                            <UserCircle2 className="w-3 h-3 text-blue-600" />
+                            <span>{getBarberName(ag.staff)}</span>
                           </div>
                         </div>
                       </div>
@@ -175,17 +221,15 @@ export default function AgendamentosPage() {
   };
 
   const renderVisaoSemana = () => {
-    const inicioSemana = startOfWeek(selectedDate, { weekStartsOn: 0 }); // Domingo
+    const inicioSemana = startOfWeek(selectedDate, { weekStartsOn: 0 });
     const diasSemana = eachDayOfInterval({ start: inicioSemana, end: endOfWeek(selectedDate, { weekStartsOn: 0 }) });
     
     return (
       <div className="flex flex-col bg-white overflow-hidden">
-        {/* Cabeçalho dos Dias */}
-        <div className="grid grid-cols-8 border-b border-slate-200 bg-slate-50">
+        <div className="grid grid-cols-8 border-b border-slate-200 bg-slate-50 sticky top-0 z-30">
           <div className="col-span-1 p-2 border-r border-slate-200"></div>
           {diasSemana.map(dia => (
             <div key={dia.toISOString()} className={cn("col-span-1 p-3 text-center border-r border-slate-200 last:border-0", isToday(dia) && "bg-blue-50")}>
-              {/* CORREÇÃO: Pega o formato, tira pontos e corta exatamente as 3 primeiras letras */}
               <p className="text-xs font-bold text-slate-500 uppercase">
                 {format(dia, 'EEE', { locale: ptBR }).replace('.', '').substring(0, 3)}
               </p>
@@ -194,28 +238,55 @@ export default function AgendamentosPage() {
           ))}
         </div>
         
-        {/* Grelha de Horas */}
-        <div className="overflow-y-auto max-h-[600px] overflow-x-auto">
-          <div className="min-w-[800px]"> {/* Força scroll no mobile */}
-            {horasComerciais.map((hora) => (
-              <div key={hora} className="grid grid-cols-8 border-b border-slate-100 min-h-[80px]">
-                <div className="col-span-1 border-r border-slate-200 p-2 text-right">
-                  <span className="text-xs font-bold text-slate-400">{hora.toString().padStart(2, '0')}:00</span>
+        <div className="overflow-y-auto max-h-150 overflow-x-auto relative">
+          <div className="min-w-200">
+            {horasDoDia.map((hora) => {
+              const isCurrentHourRow = isToday(selectedDate) && currentTime.getHours() === hora;
+              return (
+                <div 
+                  key={hora} 
+                  ref={isCurrentHourRow ? currentHourRef : null}
+                  className="grid grid-cols-8 border-b border-slate-100 min-h-20"
+                >
+                  <div className="col-span-1 border-r border-slate-200 p-2 text-right">
+                    <span className={cn("text-xs font-bold", isCurrentHourRow ? "text-red-500" : "text-slate-400")}>
+                      {hora.toString().padStart(2, '0')}:00
+                    </span>
+                  </div>
+                  {diasSemana.map(dia => {
+                    const ags = agendamentos.filter(ag => isSameDay(new Date(ag.scheduled_at), dia) && new Date(ag.scheduled_at).getHours() === hora);
+                    const isTodayAndCurrentHour = isToday(dia) && currentTime.getHours() === hora;
+                    const minutosPorcentagem = (currentTime.getMinutes() / 60) * 100;
+
+                    return (
+                      <div key={dia.toISOString()} className={cn("col-span-1 border-r border-slate-100 p-1 relative", isToday(dia) && "bg-blue-50/30")}>
+                        
+                        {isTodayAndCurrentHour && (
+                          <div 
+                            className="absolute left-0 right-0 z-10 flex items-center pointer-events-none"
+                            style={{ top: `${minutosPorcentagem}%`, transform: 'translateY(-50%)' }}
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full bg-red-500 -ml-0.75"></div>
+                            <div className="h-0.5 w-full bg-red-500/60"></div>
+                          </div>
+                        )}
+
+                        {ags.map(ag => (
+                          <div 
+                            key={ag.id} 
+                            onClick={() => setSelectedAppointment(ag)}
+                            className="bg-blue-600 border border-blue-700 rounded-md p-1 mb-1 shadow-sm overflow-hidden cursor-pointer hover:bg-blue-700 relative z-20" 
+                            title={getBarberName(ag.staff)}
+                          >
+                            <p className="text-[10px] font-bold text-white truncate">{ag.client_name}</p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
-                {diasSemana.map(dia => {
-                  const ags = agendamentos.filter(ag => isSameDay(new Date(ag.scheduled_at), dia) && new Date(ag.scheduled_at).getHours() === hora);
-                  return (
-                    <div key={dia.toISOString()} className={cn("col-span-1 border-r border-slate-100 p-1 relative", isToday(dia) && "bg-blue-50/30")}>
-                      {ags.map(ag => (
-                        <div key={ag.id} className="bg-blue-600 border border-blue-700 rounded-md p-1 mb-1 shadow-sm overflow-hidden cursor-pointer hover:bg-blue-700">
-                          <p className="text-[10px] font-bold text-white truncate">{ag.client_name}</p>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -241,14 +312,19 @@ export default function AgendamentosPage() {
             const agsDoDia = agendamentos.filter(ag => isSameDay(new Date(ag.scheduled_at), dia));
             const isMesAtual = isSameMonth(dia, selectedDate);
             return (
-              <div key={dia.toISOString()} className={cn("min-h-[100px] p-2 border-r border-b border-slate-200 relative", !isMesAtual && "bg-slate-50/50 opacity-50")}>
+              <div key={dia.toISOString()} className={cn("min-h-25 p-2 border-r border-b border-slate-200 relative", !isMesAtual && "bg-slate-50/50 opacity-50")}>
                 <span className={cn("text-sm font-bold", isToday(dia) ? "bg-blue-600 text-white w-6 h-6 rounded-full flex items-center justify-center" : "text-slate-700")}>
                   {format(dia, 'd')}
                 </span>
                 
                 <div className="mt-2 flex flex-col gap-1">
                   {agsDoDia.slice(0, 3).map(ag => (
-                    <div key={ag.id} className="bg-blue-50 border border-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded truncate">
+                    <div 
+                      key={ag.id} 
+                      onClick={() => setSelectedAppointment(ag)}
+                      className="bg-blue-50 border border-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded truncate cursor-pointer hover:bg-blue-100 transition-colors" 
+                      title={getBarberName(ag.staff)}
+                    >
                       {new Date(ag.scheduled_at).getHours()}h - {ag.client_name.split(' ')[0]}
                     </div>
                   ))}
@@ -267,7 +343,6 @@ export default function AgendamentosPage() {
   return (
     <div className="flex flex-col gap-6 p-2 md:p-6 bg-slate-50 min-h-[calc(100vh-4rem)]">
       
-      {/* Cabeçalho Premium com Tabs */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-sm"><Calendar className="size-6 text-blue-600" /></div>
@@ -278,7 +353,6 @@ export default function AgendamentosPage() {
         </div>
         
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
-          {/* Alternador de Visões */}
           <div className="flex bg-slate-200/50 p-1 rounded-xl w-full sm:w-auto overflow-x-auto">
             <Button variant="ghost" onClick={() => setViewMode("day")} className={cn("flex-1 sm:flex-none rounded-lg h-9 px-3 font-bold text-xs transition-all", viewMode === "day" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500")}>
               <CalendarDays className="size-4 mr-2" /> Dia
@@ -318,14 +392,25 @@ export default function AgendamentosPage() {
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="font-bold text-slate-700">Data / Hora</TableHead>
                   <TableHead className="font-bold text-slate-700">Cliente</TableHead>
+                  <TableHead className="font-bold text-slate-700">Profissional</TableHead>
                   <TableHead className="font-bold text-slate-700">Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {agendamentos.map((ag) => (
-                  <TableRow key={ag.id} className="hover:bg-slate-50 transition-colors">
+                  <TableRow 
+                    key={ag.id} 
+                    onClick={() => setSelectedAppointment(ag)}
+                    className="hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
                     <TableCell className="font-bold text-slate-900">{formatarDataHora(ag.scheduled_at)}</TableCell>
                     <TableCell><p className="font-bold text-slate-800">{ag.client_name}</p></TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <UserCircle2 className="w-4 h-4 text-blue-500" />
+                        <span className="font-medium text-sm">{getBarberName(ag.staff)}</span>
+                      </div>
+                    </TableCell>
                     <TableCell>{getStatusBadge(ag.status)}</TableCell>
                   </TableRow>
                 ))}
@@ -334,6 +419,13 @@ export default function AgendamentosPage() {
           </div>
         </div>
       )}
+
+      <AppointmentDetailsDialog 
+        appointment={selectedAppointment}
+        isOpen={!!selectedAppointment}
+        onClose={() => setSelectedAppointment(null)}
+        onUpdate={fetchAgendamentos}
+      />
     </div>
   );
 }

@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { z } from "zod";
 
+export const runtime = 'edge';
+
 // 1. Tipagens Estritas Baseadas nos Enums do Banco de Dados
 const roleSchema = z.enum(["owner", "manager", "barber", "receptionist"]);
 
@@ -74,7 +76,8 @@ export async function GET(request: Request) {
         client_name, 
         client_phone,
         services ( name, price, duration_minutes ),
-        staff!barber_id ( 
+        staff!barber_id (
+          full_name,
           profiles ( full_name ) 
         ) 
       `)
