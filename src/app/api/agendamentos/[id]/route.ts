@@ -1,65 +1,67 @@
+// src/app/api/agendamentos/[id]/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { z } from "zod";
 
 export const runtime = 'edge';
 
-// 1. Tipagens Estritas Baseadas nos Enums da Base de Dados
 const roleSchema = z.enum(["owner", "manager", "barber", "receptionist"]);
-const statusSchema = z.enum(["scheduled", "in_progress", "completed", "canceled", "awaiting_payment"]);
+const statusSchema = z.enum(["scheduled", "in_progress", "completed", "canceled", "awaiting_payment", "no_show"]);
 
-// No Next.js, os parâmetros dinâmicos em Route Handlers devem ser tipados como Promise
+const updateAppointmentSchema = z.object({
+  status: statusSchema.optional(),
+  start_time: z.string().datetime().optional(),
+  end_time: z.string().datetime().optional(),
+  service_id: z.string().uuid().optional(),
+  client_id: z.string().uuid().optional(),
+  notes: z.string().nullable().optional(),
+}).refine(data => Object.keys(data).length > 0, {
+  message: "Nenhum dado válido fornecido para atualização.",
+});
+
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-// ============================================================================
-// MÉTODO PATCH: Atualizar o Status do Agendamento (Zero-Trust)
-// ============================================================================
 export async function PATCH(request: Request, context: RouteParams) {
   try {
     const { id } = await context.params;
     const supabase = await createClient();
 
-    // 1. Autenticação do Utilizador
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
       return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
     }
 
-    // 2. Validação Estrita do Payload (Body)
     const rawBody = await request.json().catch(() => null);
-    const bodyValidation = z.object({
-      status: statusSchema,
-    }).safeParse(rawBody);
+    const bodyValidation = updateAppointmentSchema.safeParse(rawBody);
 
     if (!bodyValidation.success) {
       return NextResponse.json(
-        { error: "Status inválido fornecido.", details: bodyValidation.error.format() },
+        { error: "Dados inválidos fornecidos.", details: bodyValidation.error.format() },
         { status: 400 }
       );
     }
 
-    const novoStatus = bodyValidation.data.status;
+    const payloadAtualizacao = bodyValidation.data;
 
-    // 3. Zero-Trust: Descobrir cargo do utilizador e a sua barbearia
+    // CORREÇÃO AQUI: Mudado de staff_role_type para role
     const { data: member, error: memberError } = await supabase
       .from("barbershop_members")
-      .select("barbershop_id, staff_role_type")
+      .select("barbershop_id, role")
       .eq("profile_id", user.id)
       .single();
 
     if (memberError || !member) {
+      console.error("[PATCH_ROLE_ERROR]", memberError);
       throw new Error("Acesso negado à barbearia.");
     }
 
-    // Identificar nível de acesso
-    const roleParse = roleSchema.safeParse(member.staff_role_type);
-    const role = roleParse.success ? roleParse.data : "barber";
-    const isManagerOrOwner = role === "owner" || role === "manager" || role === "receptionist";
+    // CORREÇÃO AQUI: Avaliando member.role
+    const roleParse = roleSchema.safeParse(member.role);
+    const userRole = roleParse.success ? roleParse.data : "barber";
+    const isManagerOrOwner = userRole === "owner" || userRole === "manager" || userRole === "receptionist";
 
-    // 4. Verificação de Propriedade (Acesso Horizontal Mínimo)
-    // Precisamos saber se o agendamento pertence a esta barbearia e a quem está atribuído.
     const { data: existingAppt, error: checkError } = await supabase
       .from("appointments")
       .select("barber_id, barbershop_id")
@@ -70,29 +72,96 @@ export async function PATCH(request: Request, context: RouteParams) {
       return NextResponse.json({ error: "Agendamento não encontrado." }, { status: 404 });
     }
 
-    // Proteção: Ninguém pode alterar dados de outra barbearia
     if (existingAppt.barbershop_id !== member.barbershop_id) {
       return NextResponse.json({ error: "Acesso negado a este registo." }, { status: 403 });
     }
 
-    // Proteção: Se for apenas barbeiro, só altera a própria agenda
     if (!isManagerOrOwner && existingAppt.barber_id !== user.id) {
       return NextResponse.json({ error: "Apenas pode alterar os seus próprios agendamentos." }, { status: 403 });
     }
 
-    // 5. Executar a Atualização Segura
-    const { error: updateError } = await supabase
+    const { data: updatedData, error: updateError } = await supabase
       .from("appointments")
-      .update({ status: novoStatus })
-      .eq("id", id);
+      .update(payloadAtualizacao)
+      .eq("id", id)
+      .select()
+      .single();
 
     if (updateError) {
+      console.error("[PATCH_UPDATE_DB_ERROR]", updateError);
       throw new Error(`Falha ao atualizar na base de dados: ${updateError.message}`);
     }
 
-    return NextResponse.json({ success: true, message: "Status atualizado com sucesso." }, { status: 200 });
+    return NextResponse.json({ success: true, data: updatedData, message: "Agendamento atualizado com sucesso." }, { status: 200 });
 
-  } catch (error: unknown) { // Tratamento livre de "any"
+  } catch (error: unknown) {
+    console.error("[PATCH_FATAL_ERROR]", error);
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    return NextResponse.json({ error: "Erro interno do servidor." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request, context: RouteParams) {
+  try {
+    const { id } = await context.params;
+    const supabase = await createClient();
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
+    }
+
+    // CORREÇÃO AQUI: Mudado de staff_role_type para role
+    const { data: member, error: memberError } = await supabase
+      .from("barbershop_members")
+      .select("barbershop_id, role")
+      .eq("profile_id", user.id)
+      .single();
+
+    if (memberError || !member) {
+      console.error("[DELETE_ROLE_ERROR]", memberError);
+      throw new Error("Acesso negado à barbearia.");
+    }
+
+    // CORREÇÃO AQUI: Avaliando member.role
+    const roleParse = roleSchema.safeParse(member.role);
+    const userRole = roleParse.success ? roleParse.data : "barber";
+    const isManagerOrOwner = userRole === "owner" || userRole === "manager" || userRole === "receptionist";
+
+    const { data: existingAppt, error: checkError } = await supabase
+      .from("appointments")
+      .select("barber_id, barbershop_id")
+      .eq("id", id)
+      .single();
+
+    if (checkError || !existingAppt) {
+      return NextResponse.json({ error: "Agendamento não encontrado." }, { status: 404 });
+    }
+
+    if (existingAppt.barbershop_id !== member.barbershop_id) {
+      return NextResponse.json({ error: "Acesso negado a este registo." }, { status: 403 });
+    }
+
+    if (!isManagerOrOwner && existingAppt.barber_id !== user.id) {
+      return NextResponse.json({ error: "Apenas pode excluir os seus próprios agendamentos." }, { status: 403 });
+    }
+
+    const { error: deleteError } = await supabase
+      .from("appointments")
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) {
+      console.error("[DELETE_DB_ERROR]", deleteError);
+      throw new Error(`Falha ao excluir na base de dados: ${deleteError.message}`);
+    }
+
+    return NextResponse.json({ success: true, message: "Agendamento excluído com sucesso." }, { status: 200 });
+
+  } catch (error: unknown) {
+    console.error("[DELETE_FATAL_ERROR]", error);
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
