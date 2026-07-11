@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
-// Tipagem atualizada para incluir o status 'no_show' e o avatar do cliente
+// Tipagem atualizada: agora 'services' é um Array de objetos
 export type AppointmentData = {
   id: string;
   scheduled_at: string;
@@ -35,7 +35,7 @@ export type AppointmentData = {
   client_name: string;
   client_phone: string | null;
   client_avatar?: string | null;
-  services: { name: string; price: number; duration_minutes: number; } | null;
+  services: { id: string; name: string; price: number; duration_minutes: number; }[];
   staff: { profiles: { full_name: string | null } | { full_name: string | null }[] | null } | null;
 };
 
@@ -113,7 +113,6 @@ export function AppointmentDetailsDialog({ appointment, isOpen, onClose, onUpdat
   return (
     <>
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        {/* Usando a classe sugerida sm:max-w-105 ao invés do valor arbitrário */}
         <DialogContent className="sm:max-w-105 p-0 overflow-hidden bg-white border-none shadow-2xl rounded-3xl">
           
           <div className="bg-slate-50 p-6 pb-5 border-b border-slate-100">
@@ -160,16 +159,31 @@ export function AppointmentDetailsDialog({ appointment, isOpen, onClose, onUpdat
               </div>
             </div>
 
-            <div className="flex items-center gap-3 text-slate-700">
-              <div className="bg-slate-100 p-2.5 rounded-xl"><Scissors className="w-5 h-5 text-slate-600" /></div>
+            <div className="flex items-start gap-3 text-slate-700">
+              <div className="bg-slate-100 p-2.5 rounded-xl mt-1"><Scissors className="w-5 h-5 text-slate-600" /></div>
               <div className="flex-1">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Serviço</p>
-                <div className="flex justify-between items-center w-full">
-                  <p className="font-bold">{appointment.services?.name || "Serviço Avulso"}</p>
-                  <p className="font-black text-blue-600">
-                    {appointment.services?.price ? `R$ ${appointment.services.price.toFixed(2)}` : "--"}
-                  </p>
-                </div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Serviços</p>
+                
+                {appointment.services && appointment.services.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    {appointment.services.map((srv, idx) => (
+                      <div key={idx} className="flex justify-between items-center w-full border-b border-slate-100 pb-2 last:border-0 last:pb-0">
+                        <p className="font-bold text-sm">{srv.name}</p>
+                        <p className="font-bold text-slate-600 text-sm">
+                          {srv.price != null ? `R$ ${srv.price.toFixed(2)}` : "--"}
+                        </p>
+                      </div>
+                    ))}
+                    <div className="flex justify-between items-center w-full mt-2 pt-2 border-t-2 border-slate-100">
+                      <p className="font-black text-slate-800">Total Estimado</p>
+                      <p className="font-black text-blue-600 text-lg">
+                        R$ {appointment.services.reduce((acc, curr) => acc + (curr.price || 0), 0).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="font-bold text-slate-500 italic">Nenhum serviço registrado</p>
+                )}
               </div>
             </div>
           </div>

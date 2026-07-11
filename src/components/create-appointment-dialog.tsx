@@ -23,23 +23,23 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
-// Importando a tipagem de dados vinda do modal de detalhes (se estiver no mesmo diretório, ou ajustamos aqui)
-type AppointmentData = {
+// CORREÇÃO: Tipo atualizado para coincidir com o envio da page.tsx (services é um Array)
+export type AppointmentData = {
   id: string;
   scheduled_at: string;
   status: "scheduled" | "in_progress" | "completed" | "canceled" | "awaiting_payment" | "no_show";
   client_name: string;
   client_phone: string | null;
-  services: { id?: string; name: string; price: number; duration_minutes: number; } | null;
+  services: { id: string; name: string; price: number; duration_minutes: number; }[];
   staff: { profiles: { full_name: string | null } | { full_name: string | null }[] | null } | null;
-  barber_id?: string; // Garantindo que o barber_id venha para edição
+  barber_id?: string;
 };
 
 const formSchema = z.object({
   client_name: z.string().min(3, "Nome muito curto"),
   client_phone: z.string().optional(),
-  scheduled_date: z.string().min(10, "Data é obrigatória"), // Separado para UX melhorada
-  scheduled_time: z.string().min(4, "Horário é obrigatório"), // Separado para UX melhorada
+  scheduled_date: z.string().min(10, "Data é obrigatória"), 
+  scheduled_time: z.string().min(4, "Horário é obrigatório"),
   barber_id: z.string().optional(),
   service_ids: z.array(z.string()), 
 });
@@ -81,9 +81,6 @@ const traduzirCargo = (role: string) => {
   return cargos[role] || role;
 };
 
-// --- NOVAS PROPRIEDADES ---
-// isOpen e onOpenChange permitem que a página controle a abertura para o modo edição.
-// appointmentToEdit fornece os dados a serem editados.
 export function CreateAppointmentDialog({ 
   onAppointmentCreated, 
   isOpen, 
@@ -111,7 +108,7 @@ export function CreateAppointmentDialog({
     defaultValues: { 
       client_name: "", 
       client_phone: "", 
-      scheduled_date: format(new Date(), "yyyy-MM-dd"), // Data padrão hoje
+      scheduled_date: format(new Date(), "yyyy-MM-dd"),
       scheduled_time: "", 
       service_ids: [], 
       barber_id: "" 
@@ -122,16 +119,21 @@ export function CreateAppointmentDialog({
   useEffect(() => {
     if (isModalOpen && isEditing && appointmentToEdit) {
       const dt = new Date(appointmentToEdit.scheduled_at);
+      
+      // CORREÇÃO: Extrair IDs dos múltiplos serviços do array
+      const extractedServiceIds = appointmentToEdit.services 
+        ? appointmentToEdit.services.map(s => s.id) 
+        : [];
+
       form.reset({
         client_name: appointmentToEdit.client_name,
         client_phone: appointmentToEdit.client_phone || "",
         scheduled_date: format(dt, "yyyy-MM-dd"),
         scheduled_time: format(dt, "HH:mm"),
         barber_id: appointmentToEdit.barber_id || options?.currentUserId || "",
-        service_ids: appointmentToEdit.services?.id ? [appointmentToEdit.services.id] : [],
+        service_ids: extractedServiceIds,
       });
     } else if (isModalOpen && !isEditing) {
-      // Se for criar novo, reseta pro padrão
       form.reset({
         client_name: "", 
         client_phone: "", 
@@ -191,7 +193,6 @@ export function CreateAppointmentDialog({
     }, { tempo: 0, preco: 0 });
   }, [selectedServiceIds, options]);
 
-  // SIMULAÇÃO DE HORÁRIOS DISPONÍVEIS (Mocking Phase 4)
   const timeSlots = useMemo(() => {
     const slots = [];
     for (let h = 9; h <= 19; h++) {
@@ -206,7 +207,6 @@ export function CreateAppointmentDialog({
     const toastId = toast.loading(isEditing ? "Atualizando horário..." : "Agendando horário...");
     const tempoCalculado = totais.tempo > 0 ? totais.tempo : 30;
 
-    // Combina a data e hora separadas num único ISO string pro Supabase
     const scheduledDateTime = new Date(`${values.scheduled_date}T${values.scheduled_time}:00`).toISOString();
 
     try {
@@ -254,7 +254,6 @@ export function CreateAppointmentDialog({
 
   return (
     <Dialog open={isModalOpen} onOpenChange={setModalOpen}>
-      {/* Esconde o botão disparador se o modal for controlado externamente (Edição) */}
       {!onOpenChange && (
         <DialogTrigger asChild>
           <Button className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md font-bold transition-all active:scale-95">
@@ -368,7 +367,6 @@ export function CreateAppointmentDialog({
               />
             </div>
 
-            {/* EXPERIÊNCIA DE DATA E HORA APRIMORADA COM CARDS */}
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
               <FormLabel className="font-bold text-slate-700 mb-3 block">Quando será o atendimento?</FormLabel>
               <div className="flex flex-col gap-4">
@@ -394,7 +392,6 @@ export function CreateAppointmentDialog({
                         <FormItem>
                           <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto pr-1">
                             {timeSlots.map((time) => {
-                              // Simulação de horário ocupado (Ex: Meio-dia)
                               const isOccupied = time === "12:00" && selectedDate === format(new Date(), "yyyy-MM-dd");
                               const isSelected = field.value === time;
 
@@ -425,7 +422,6 @@ export function CreateAppointmentDialog({
               </div>
             </div>
 
-            {/* SELEÇÃO MÚLTIPLA DE SERVIÇOS */}
             {options && options.services.length > 0 && (
               <div className="pt-2">
                 <FormLabel className="font-bold text-slate-700 mb-2 block">Serviços do Atendimento</FormLabel>
@@ -453,7 +449,6 @@ export function CreateAppointmentDialog({
               </div>
             )}
 
-            {/* PAINEL DE RESUMO */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Estimado</p>

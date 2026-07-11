@@ -5,24 +5,42 @@ import { z } from "zod";
 
 export const runtime = 'edge';
 
-// 1. Tipagens Estritas Baseadas nos Enums do Banco de Dados
+// ============================================================================
+// TIPAGENS ESTATÍSTICAS (Sem uso de "any")
+// ============================================================================
 const roleSchema = z.enum(["owner", "manager", "barber", "receptionist"]);
 
-// 2. Validação para o corpo do POST (Evita injeção e garante os dados corretos)
 const createAppointmentSchema = z.object({
   client_name: z.string().min(2, "O nome do cliente é obrigatório."),
   client_phone: z.string().nullable().optional(),
-  // O zod valida se é uma string que pode ser convertida para Data
   scheduled_at: z.string().refine((val) => !isNaN(Date.parse(val)), { message: "Data e hora inválidas." }),
   barber_id: z.string().uuid("ID do barbeiro inválido.").optional(),
-  // Duração estimada do atendimento. Se o front não enviar, assumimos 30 minutos por padrão.
   duration_minutes: z.number().int().positive().optional().default(30),
-  // Aceita o array de serviços que o novo modal envia
   service_ids: z.array(z.string()).optional().default([]),
 });
 
+interface ServiceData {
+  id: string;
+  name: string;
+  price: number;
+  duration_minutes: number;
+}
+
+interface AppointmentRaw {
+  id: string;
+  scheduled_at: string;
+  status: string;
+  client_name: string;
+  client_phone: string | null;
+  appointment_services: { services: ServiceData | null }[] | null;
+  staff: {
+    full_name: string | null;
+    profiles: { full_name: string | null } | { full_name: string | null }[] | null;
+  } | null;
+}
+
 // ============================================================================
-// METODO GET: Listar Agendamentos (Zero-Trust + Filtros)
+// METODO GET: Listar Agendamentos (Zero-Trust + Filtros + Múltiplos Serviços)
 // ============================================================================
 export async function GET(request: Request) {
   try {
@@ -66,7 +84,7 @@ export async function GET(request: Request) {
       .eq("barbershop_id", member.barbershop_id)
       .single();
 
-    // Query Base CORRIGIDA: Buscar o full_name através do join com profiles
+    // Query Base CORRIGIDA: Buscar os múltiplos serviços através da tabela pivot
     let query = supabase
       .from("appointments")
       .select(`
@@ -75,7 +93,9 @@ export async function GET(request: Request) {
         status, 
         client_name, 
         client_phone,
-        services ( name, price, duration_minutes ),
+        appointment_services (
+          services ( id, name, price, duration_minutes )
+        ),
         staff!barber_id (
           full_name,
           profiles ( full_name ) 
@@ -85,15 +105,12 @@ export async function GET(request: Request) {
 
     // Filtros de Permissão
     if (!isManagerOrOwner) {
-      // O barbeiro só pode ver sua própria agenda (usando o ID da tabela staff)
       if (myStaff) {
         query = query.eq("barber_id", myStaff.id);
       } else {
-        // Se não for gerente e não tiver registro na tabela staff, não tem agenda a exibir
         return NextResponse.json({ data: [] });
       }
     } else if (specificBarberId) {
-      // Gerente/Dono pode filtrar por um barbeiro específico
       query = query.eq("barber_id", specificBarberId);
     }
 
@@ -102,7 +119,7 @@ export async function GET(request: Request) {
       query = query.gte("scheduled_at", dataInicio).lte("scheduled_at", dataFim);
     }
 
-    // Ordenação (atendendo à exigência de listar do mais recente para o mais antigo considerando hora)
+    // Ordenação combinada por data e hora do lançamento
     query = query.order("scheduled_at", { ascending: false });
 
     const { data, error } = await query;
@@ -112,7 +129,27 @@ export async function GET(request: Request) {
       throw new Error(`Erro ao buscar dados: ${error.message}`);
     }
 
-    return NextResponse.json({ data });
+    // Processamento Estritamente Tipado (sem 'any')
+    const typedData = data as unknown as AppointmentRaw[];
+    
+    const formattedData = typedData.map((appt) => {
+      // Separa a propriedade pivot e reconstrói o objeto principal
+      const { appointment_services, ...rest } = appt;
+      
+      // Filtra de forma tipada os serviços, eliminando nulos
+      const mappedServices = appointment_services
+        ? appointment_services
+            .map((as) => as.services)
+            .filter((s): s is ServiceData => s !== null)
+        : [];
+
+      return {
+        ...rest,
+        services: mappedServices
+      };
+    });
+
+    return NextResponse.json({ data: formattedData });
 
   } catch (error: unknown) { 
     console.error("[ERRO_API_AGENDAMENTOS_GET]", error);
@@ -124,7 +161,7 @@ export async function GET(request: Request) {
 }
 
 // ============================================================================
-// METODO POST: Criar Agendamento com Time Blocking Inteligente
+// METODO POST: Criar Agendamento com Time Blocking e Tabela Pivot
 // ============================================================================
 export async function POST(request: Request) {
   try {
@@ -175,7 +212,6 @@ export async function POST(request: Request) {
       .eq("barbershop_id", member.barbershop_id)
       .single();
 
-    // Define de quem será o agendamento
     const finalBarberId = (isManagerOrOwner && barber_id) ? barber_id : myStaff?.id;
 
     if (!finalBarberId) {
@@ -185,7 +221,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // --- LÓGICA DE TIME BLOCKING (ANTI-CHOQUE DE HORÁRIOS) ---
+    // LÓGICA DE TIME BLOCKING
     const requestedStart = new Date(scheduled_at);
     const requestedEnd = new Date(requestedStart.getTime() + duration_minutes * 60000);
 
@@ -224,7 +260,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // Gravação segura no banco
+    // 1. Gravação segura na Tabela Principal (Sem service_id)
     const { data: newAppointment, error: insertError } = await supabase
       .from("appointments")
       .insert({
@@ -233,15 +269,32 @@ export async function POST(request: Request) {
         client_name,
         client_phone: client_phone || null,
         scheduled_at: requestedStart.toISOString(),
-        status: "scheduled",
-        service_id: service_ids.length > 0 ? service_ids[0] : null
+        status: "scheduled"
       })
-      .select()
+      .select("id")
       .single();
 
-    if (insertError) {
+    if (insertError || !newAppointment) {
       console.error("[ERRO_SUPABASE_INSERT_POST]", insertError);
       throw new Error("Erro do banco de dados ao salvar o agendamento.");
+    }
+
+    // 2. Gravação de Múltiplos Serviços na Tabela Pivot
+    if (service_ids && service_ids.length > 0) {
+      const pivotData = service_ids.map((id: string) => ({
+        appointment_id: newAppointment.id,
+        service_id: id
+      }));
+
+      const { error: pivotError } = await supabase
+        .from("appointment_services")
+        .insert(pivotData);
+
+      if (pivotError) {
+        console.error("[ERRO_SUPABASE_PIVOT_POST]", pivotError);
+        // Pode decidir se aborta ou apenas avisa em log se falhar os serviços adicionais
+        throw new Error("Agendamento criado, mas falhou ao gravar os serviços.");
+      }
     }
 
     return NextResponse.json({ success: true, data: newAppointment }, { status: 201 });

@@ -8,13 +8,15 @@ export const runtime = 'edge';
 const roleSchema = z.enum(["owner", "manager", "barber", "receptionist"]);
 const statusSchema = z.enum(["scheduled", "in_progress", "completed", "canceled", "awaiting_payment", "no_show"]);
 
+// Schema atualizado para refletir o envio de dados do frontend, incluindo múltiplos serviços
 const updateAppointmentSchema = z.object({
   status: statusSchema.optional(),
-  start_time: z.string().datetime().optional(),
-  end_time: z.string().datetime().optional(),
-  service_id: z.string().uuid().optional(),
-  client_id: z.string().uuid().optional(),
-  notes: z.string().nullable().optional(),
+  client_name: z.string().optional(),
+  client_phone: z.string().nullable().optional(),
+  scheduled_at: z.string().datetime().optional(),
+  barber_id: z.string().uuid().optional(),
+  service_ids: z.array(z.string()).optional(), 
+  duration_minutes: z.number().optional(), // Aceite pelo backend para evitar erro de validação
 }).refine(data => Object.keys(data).length > 0, {
   message: "Nenhum dado válido fornecido para atualização.",
 });
@@ -43,9 +45,16 @@ export async function PATCH(request: Request, context: RouteParams) {
       );
     }
 
-    const payloadAtualizacao = bodyValidation.data;
+    // CORREÇÃO: Clonamos o objeto para manipular sem criar variáveis não utilizadas (ESLint fix)
+    const payloadAtualizacao = { ...bodyValidation.data };
+    
+    // Guardamos os serviços para a tabela Pivot
+    const serviceIdsToUpdate = payloadAtualizacao.service_ids;
+    
+    // Removemos chaves que não pertencem à tabela 'appointments'
+    delete payloadAtualizacao.service_ids;
+    delete payloadAtualizacao.duration_minutes;
 
-    // CORREÇÃO AQUI: Mudado de staff_role_type para role
     const { data: member, error: memberError } = await supabase
       .from("barbershop_members")
       .select("barbershop_id, role")
@@ -57,7 +66,6 @@ export async function PATCH(request: Request, context: RouteParams) {
       throw new Error("Acesso negado à barbearia.");
     }
 
-    // CORREÇÃO AQUI: Avaliando member.role
     const roleParse = roleSchema.safeParse(member.role);
     const userRole = roleParse.success ? roleParse.data : "barber";
     const isManagerOrOwner = userRole === "owner" || userRole === "manager" || userRole === "receptionist";
@@ -80,6 +88,7 @@ export async function PATCH(request: Request, context: RouteParams) {
       return NextResponse.json({ error: "Apenas pode alterar os seus próprios agendamentos." }, { status: 403 });
     }
 
+    // 1. Atualizar a tabela principal (appointments) com os dados base
     const { data: updatedData, error: updateError } = await supabase
       .from("appointments")
       .update(payloadAtualizacao)
@@ -90,6 +99,37 @@ export async function PATCH(request: Request, context: RouteParams) {
     if (updateError) {
       console.error("[PATCH_UPDATE_DB_ERROR]", updateError);
       throw new Error(`Falha ao atualizar na base de dados: ${updateError.message}`);
+    }
+
+    // 2. Atualizar a tabela Pivot de múltiplos serviços (appointment_services)
+    if (serviceIdsToUpdate !== undefined) {
+      // Primeiro, removemos todos os serviços atrelados anteriormente a este agendamento
+      const { error: deletePivotError } = await supabase
+        .from("appointment_services")
+        .delete()
+        .eq("appointment_id", id);
+      
+      if (deletePivotError) {
+        console.error("[PATCH_DELETE_PIVOT_ERROR]", deletePivotError);
+        throw new Error("Falha ao limpar os serviços anteriores do agendamento.");
+      }
+
+      // De seguida, inserimos os novos (se a lista não estiver vazia)
+      if (serviceIdsToUpdate.length > 0) {
+        const pivotData = serviceIdsToUpdate.map((sId: string) => ({
+          appointment_id: id,
+          service_id: sId
+        }));
+
+        const { error: insertPivotError } = await supabase
+          .from("appointment_services")
+          .insert(pivotData);
+
+        if (insertPivotError) {
+          console.error("[PATCH_INSERT_PIVOT_ERROR]", insertPivotError);
+          throw new Error("Falha ao registar os novos serviços no agendamento.");
+        }
+      }
     }
 
     return NextResponse.json({ success: true, data: updatedData, message: "Agendamento atualizado com sucesso." }, { status: 200 });
@@ -113,7 +153,6 @@ export async function DELETE(request: Request, context: RouteParams) {
       return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
     }
 
-    // CORREÇÃO AQUI: Mudado de staff_role_type para role
     const { data: member, error: memberError } = await supabase
       .from("barbershop_members")
       .select("barbershop_id, role")
@@ -125,7 +164,6 @@ export async function DELETE(request: Request, context: RouteParams) {
       throw new Error("Acesso negado à barbearia.");
     }
 
-    // CORREÇÃO AQUI: Avaliando member.role
     const roleParse = roleSchema.safeParse(member.role);
     const userRole = roleParse.success ? roleParse.data : "barber";
     const isManagerOrOwner = userRole === "owner" || userRole === "manager" || userRole === "receptionist";

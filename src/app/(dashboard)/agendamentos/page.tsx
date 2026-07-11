@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CreateAppointmentDialog } from "@/components/create-appointment-dialog";
 import { AppointmentDetailsDialog, AppointmentData } from "@/components/appointment-details-dialog";
 import { cn } from "@/lib/utils";
@@ -28,17 +29,54 @@ import { cn } from "@/lib/utils";
 type ViewMode = "day" | "week" | "month" | "list";
 type ListFilter = "upcoming" | "completed" | "no_show" | "all";
 
+interface ServiceItem {
+  id: string;
+  name: string;
+  price?: number;
+  duration_minutes?: number;
+}
+
+// Subcomponente Elegante para Exibir os Múltiplos Serviços
+function ServicesDisplay({ services }: { services: ServiceItem[] }) {
+  if (!services || services.length === 0) return <span className="text-sm text-slate-500">Sem serviço</span>;
+
+  const firstService = services[0];
+  const remaining = services.length - 1;
+
+  return (
+    <div className="flex items-center gap-1.5 truncate">
+      {/* CORREÇÃO DO ESLINT: Usando classes canônicas max-w-30 e sm:max-w-40 */}
+      <span className="truncate max-w-30 sm:max-w-40">{firstService.name}</span>
+      {remaining > 0 && (
+        <TooltipProvider delayDuration={100}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="secondary" className="h-5 px-1.5 cursor-help text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700">
+                +{remaining}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="flex flex-col gap-1 p-2 bg-slate-800 text-white border-slate-700">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Todos os Serviços:</span>
+              {services.map((s, index) => (
+                <span key={s.id || index.toString()} className="text-xs font-medium">• {s.name}</span>
+              ))}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+}
+
 export default function AgendamentosPage() {
   const [agendamentos, setAgendamentos] = useState<AppointmentData[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   
-  // Estado exclusivo para o filtro da aba de lista (Padrão: "Próximos")
   const [listFilter, setListFilter] = useState<ListFilter>("upcoming");
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   
-  // Estados para os modais
   const [selectedAppointment, setSelectedAppointment] = useState<AppointmentData | null>(null);
   const [appointmentToEdit, setAppointmentToEdit] = useState<AppointmentData | null>(null);
   
@@ -102,7 +140,6 @@ export default function AgendamentosPage() {
     }).format(data);
   };
 
-  // Melhoria Visual: Badge padronizado e tratamento para o "no_show"
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "scheduled": return <Badge className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"><Clock className="h-3 w-3 mr-1"/> Agendado</Badge>;
@@ -115,11 +152,8 @@ export default function AgendamentosPage() {
     }
   };
 
-  // CORREÇÃO: Removida a chamada à propriedade inexistente `full_name` dentro do array.
   const getBarberName = (staff: AppointmentData["staff"]) => {
     if (!staff || !staff.profiles) return "Não atribuído";
-    // Como a tipagem informa { full_name: string | null } | { full_name: string | null }[], 
-    // precisamos garantir que acessamos de forma segura:
     if (Array.isArray(staff.profiles)) {
       return staff.profiles[0]?.full_name || "Não atribuído";
     }
@@ -186,6 +220,10 @@ export default function AgendamentosPage() {
 
                 {agendamentosNestaHora.map((ag) => {
                   const minutos = new Date(ag.scheduled_at).getMinutes();
+                  
+                  const currentServices = (Array.isArray(ag.services) ? ag.services : (ag.services ? [ag.services] : [])) as ServiceItem[];
+                  const totalDuration = currentServices.reduce((acc, curr) => acc + (curr.duration_minutes || 0), 0) || 30;
+
                   return (
                     <div 
                       key={ag.id} 
@@ -199,8 +237,9 @@ export default function AgendamentosPage() {
                         <div>
                           <p className="font-bold text-slate-800">{ag.client_name}</p>
                           <div className="flex items-center gap-2 mt-1 text-sm text-slate-500 font-medium">
-                            <span className="truncate max-w-30 sm:max-w-xs">{ag.services?.name || "Serviço Avulso"}</span>
-                            <span>•</span><span>{ag.services?.duration_minutes || 30} min</span>
+                            <ServicesDisplay services={currentServices} />
+                            <span>•</span>
+                            <span>{totalDuration} min</span>
                           </div>
                           <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-600 font-medium bg-white w-fit px-2 py-0.5 rounded-md border border-slate-200 shadow-sm">
                             <UserCircle2 className="w-3 h-3 text-blue-600" />
@@ -310,7 +349,6 @@ export default function AgendamentosPage() {
           ))}
         </div>
         <div className="grid grid-cols-7 border-t border-l border-slate-200">
-          {/* CORREÇÃO: Variável 'i' removida do map */}
           {diasMes.map((dia) => {
             const agsDoDia = agendamentos.filter(ag => isSameDay(new Date(ag.scheduled_at), dia));
             const isMesAtual = isSameMonth(dia, selectedDate);
@@ -343,17 +381,15 @@ export default function AgendamentosPage() {
     );
   };
 
-  // Filtro Inteligente e Organização Padrão-Ouro para a Lista
   const getFilteredList = () => {
     const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0); // Zera as horas para comparar apenas os dias
+    hoje.setHours(0, 0, 0, 0); 
 
     return agendamentos.filter((ag) => {
       const isPast = new Date(ag.scheduled_at) < hoje;
 
       switch (listFilter) {
         case "upcoming":
-          // Apenas futuros ou hoje que não estão concluídos ou cancelados
           return !isPast && ["scheduled", "in_progress", "awaiting_payment"].includes(ag.status);
         case "completed":
           return ag.status === "completed";
@@ -364,9 +400,6 @@ export default function AgendamentosPage() {
           return true;
       }
     }).sort((a, b) => {
-      // Ordenação Inteligente
-      // Próximos: Os mais recentes primeiro (ascendente)
-      // Histórico (Concluídos/Faltas): Os últimos atendimentos primeiro (descendente)
       const timeA = new Date(a.scheduled_at).getTime();
       const timeB = new Date(b.scheduled_at).getTime();
       return (listFilter === "completed" || listFilter === "no_show") ? timeB - timeA : timeA - timeB;
@@ -378,7 +411,6 @@ export default function AgendamentosPage() {
 
     return (
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col">
-        {/* Barra de Filtros da Lista */}
         <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-slate-700 font-bold text-sm">
             <Filter className="w-4 h-4 text-slate-400" /> Exibindo: 
@@ -415,7 +447,6 @@ export default function AgendamentosPage() {
           </div>
         </div>
 
-        {/* Tabela de Dados */}
         <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-white border-b border-slate-100">
@@ -486,10 +517,8 @@ export default function AgendamentosPage() {
               <LayoutList className="size-4 mr-2" /> Lista
             </Button>
           </div>
-          {/* CORREÇÃO LINT: w-px ao invés de w-[1px] */}
           <div className="hidden sm:block h-8 w-px bg-slate-200" />
           
-          {/* CORREÇÃO TYPESCRIPT: Mantemos o componente exatamente como ele estava antes de tentarmos forçar a edição. */}
           <CreateAppointmentDialog 
             onAppointmentCreated={fetchAgendamentos} 
           />
@@ -512,8 +541,7 @@ export default function AgendamentosPage() {
         renderVisaoLista()
       )}
 
-      {/* Uso silencioso do setAppointmentToEdit para silenciar o aviso do ESLint, 
-          mesmo sem a edição implementada no CreateAppointmentDialog ainda. */}
+      {/* Renderização do Modal de Detalhes */}
       <AppointmentDetailsDialog 
         appointment={selectedAppointment}
         isOpen={!!selectedAppointment}
@@ -521,13 +549,23 @@ export default function AgendamentosPage() {
         onUpdate={fetchAgendamentos}
         onEdit={(appt) => {
           setAppointmentToEdit(appt); 
-          toast.info("A funcionalidade de edição do formulário está sendo preparada.", {
-            description: `Você tentou editar o agendamento de ${appt.client_name}`
-          });
         }}
       />
-      {/* Elemento fantasma seguro apenas para o ESLint não reclamar de unused variable */}
-      <div className="hidden" aria-hidden="true">{appointmentToEdit?.id}</div>
+
+      {/* Renderização do Modal de Edição */}
+      {appointmentToEdit && (
+        <CreateAppointmentDialog 
+          isOpen={!!appointmentToEdit}
+          onOpenChange={(open) => {
+            if (!open) setAppointmentToEdit(null);
+          }}
+          appointmentToEdit={appointmentToEdit}
+          onAppointmentCreated={() => {
+            fetchAgendamentos();
+            setAppointmentToEdit(null);
+          }} 
+        />
+      )}
     </div>
   );
 }
