@@ -84,7 +84,7 @@ export async function GET(request: Request) {
       .eq("barbershop_id", member.barbershop_id)
       .single();
 
-    // Query Base CORRIGIDA: Buscar os múltiplos serviços através da tabela pivot
+    // Query Base: Buscar os múltiplos serviços através da tabela pivot
     let query = supabase
       .from("appointments")
       .select(`
@@ -161,7 +161,7 @@ export async function GET(request: Request) {
 }
 
 // ============================================================================
-// METODO POST: Criar Agendamento com Time Blocking e Tabela Pivot
+// METODO POST: Criar Agendamento com Time Blocking e Tabela Pivot via RPC
 // ============================================================================
 export async function POST(request: Request) {
   try {
@@ -260,44 +260,28 @@ export async function POST(request: Request) {
       }
     }
 
-    // 1. Gravação segura na Tabela Principal (Sem service_id)
-    const { data: newAppointment, error: insertError } = await supabase
-      .from("appointments")
-      .insert({
-        barbershop_id: member.barbershop_id,
-        barber_id: finalBarberId,
-        client_name,
-        client_phone: client_phone || null,
-        scheduled_at: requestedStart.toISOString(),
-        status: "scheduled"
-      })
-      .select("id")
-      .single();
-
-    if (insertError || !newAppointment) {
-      console.error("[ERRO_SUPABASE_INSERT_POST]", insertError);
-      throw new Error("Erro do banco de dados ao salvar o agendamento.");
-    }
-
-    // 2. Gravação de Múltiplos Serviços na Tabela Pivot
-    if (service_ids && service_ids.length > 0) {
-      const pivotData = service_ids.map((id: string) => ({
-        appointment_id: newAppointment.id,
-        service_id: id
-      }));
-
-      const { error: pivotError } = await supabase
-        .from("appointment_services")
-        .insert(pivotData);
-
-      if (pivotError) {
-        console.error("[ERRO_SUPABASE_PIVOT_POST]", pivotError);
-        // Pode decidir se aborta ou apenas avisa em log se falhar os serviços adicionais
-        throw new Error("Agendamento criado, mas falhou ao gravar os serviços.");
+    // 1 e 2. Gravação Atômica via RPC (Agendamento + Serviços)
+    const { data: newAppointmentId, error: rpcError } = await supabase.rpc(
+      "create_appointment_with_services",
+      {
+        p_barbershop_id: member.barbershop_id,
+        p_barber_id: finalBarberId,
+        p_client_name: client_name,
+        p_client_phone: client_phone || null,
+        p_scheduled_at: requestedStart.toISOString(),
+        p_service_ids: service_ids
       }
+    );
+
+    if (rpcError || !newAppointmentId) {
+      console.error("[ERRO_SUPABASE_RPC_POST]", rpcError);
+      throw new Error("Erro do banco de dados ao salvar o agendamento e os serviços de forma segura.");
     }
 
-    return NextResponse.json({ success: true, data: newAppointment }, { status: 201 });
+    return NextResponse.json({ 
+      success: true, 
+      data: { id: newAppointmentId, message: "Agendamento criado com sucesso." } 
+    }, { status: 201 });
 
   } catch (error: unknown) { 
     console.error("[ERRO_API_AGENDAMENTOS_POST]", error);

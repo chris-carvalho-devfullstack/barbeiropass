@@ -8,6 +8,7 @@ export interface PendingService {
   id: string;
   name: string;
   price: number;
+  code?: string | null;
 }
 
 // Tipagem segura para a resposta unificada da API
@@ -73,7 +74,7 @@ export async function GET() {
     if (allServiceIds.length > 0) {
       const { data: sData, error: sError } = await supabase
         .from("services")
-        .select("id, name, price")
+        .select("id, name, price, code")
         .in("id", allServiceIds);
         
       if (!sError && sData) {
@@ -90,8 +91,9 @@ export async function GET() {
         client_id,
         barber_id,
         scheduled_at,
-        service_id,
-        services ( id, name, price ),
+        appointment_services (
+          services ( id, name, price, code )
+        ),
         staff ( full_name )
       `)
       .eq("barbershop_id", barbershopId)
@@ -105,14 +107,14 @@ export async function GET() {
     // 4. PADRONIZAÇÃO E UNIÃO DOS DADOS (Data Mapping)
     const pendingQueue: PendingClientResponse[] = (queueData || []).map((q) => {
       
-      // SOLUÇÃO DO ERRO: Tipagem super estrita para o parâmetro 's'
       const clientServices = (q.service_ids || [])
         .map((id: string) => servicesData.find((s: PendingService) => s.id === id))
         .filter((s: PendingService | undefined): s is PendingService => s !== undefined)
         .map((s: PendingService) => ({
           id: s.id,
           name: s.name,
-          price: Number(s.price)
+          price: Number(s.price),
+          code: s.code
         }));
 
       return {
@@ -128,14 +130,19 @@ export async function GET() {
     });
 
     const pendingAppointments: PendingClientResponse[] = (appointmentsData || []).map((a) => {
-      const serviceInfo = a.services as unknown as { id: string; name: string; price: number } | null;
       const staffInfo = a.staff as unknown as { full_name: string } | null;
+      
+      const pivotData = a.appointment_services as unknown as Array<{ services: { id: string; name: string; price: number; code?: string | null } | null }> | null;
 
-      const clientServices = serviceInfo ? [{
-        id: serviceInfo.id,
-        name: serviceInfo.name,
-        price: Number(serviceInfo.price)
-      }] : [];
+      const clientServices = (pivotData || [])
+        .map(as => as.services)
+        .filter((s): s is { id: string; name: string; price: number; code?: string | null } => s !== null)
+        .map(s => ({
+          id: s.id,
+          name: s.name,
+          price: Number(s.price),
+          code: s.code
+        }));
 
       return {
         id: a.id,

@@ -56,3 +56,41 @@ export interface BarbershopBusinessHours {
   close_time?: string | null;
   is_closed?: boolean;
 }
+
+// --- TIPAGENS DE AGENDAMENTOS E SERVIÇOS (SUPABASE) ---
+
+export interface Service {
+  id: string;
+  barbershop_id: string;
+  name: string;
+  duration_minutes: number;
+  price: number;
+  commission_percentage?: number | null;
+  is_active?: boolean;
+  description?: string | null;
+  category?: string | null;
+  code?: string | null;
+  photos?: string[] | null;
+}
+
+// Representa a tabela pivô 'appointment_services' retornada em um Join
+export interface AppointmentServiceData {
+  appointment_id: string;
+  service_id: string;
+  services: Service; // O Supabase aninha os dados da tabela services aqui
+}
+
+export interface Appointment {
+  id: string;
+  barbershop_id: string;
+  barber_id: string;
+  client_id?: string | null;
+  client_name: string;
+  client_phone?: string | null;
+  scheduled_at: string;
+  status: string;
+  created_at?: string;
+  
+  // A NOVA ESTRUTURA: Um array de serviços da tabela pivô
+  appointment_services: AppointmentServiceData[];
+}

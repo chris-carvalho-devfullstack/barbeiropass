@@ -42,7 +42,8 @@ type ClientSuggestion = {
   phone?: string | null;
 };
 
-type PendingService = { id: string; name: string; price: number; };
+// ADICIONADO: Suporte ao campo code que vem da API
+type PendingService = { id: string; name: string; price: number; code?: string | null; };
 
 type PendingClient = {
   id: string;
@@ -193,7 +194,8 @@ export default function PDVPage() {
   const handleStartSale = (
     selectedClient: SelectedClient | null, 
     context?: CheckoutContext, 
-    servicesToImport?: { id: string; name: string; price: number; barberId: string | null }[],
+    // ADICIONADO: Suporte ao code aqui também
+    servicesToImport?: { id: string; name: string; price: number; barberId: string | null; code?: string | null }[],
     activeBarberId?: string | null
   ) => {
     startSale(selectedClient, activeBarberId);
@@ -205,7 +207,8 @@ export default function PDVPage() {
       servicesToImport.forEach(svc => {
         const newItem = { 
           id: svc.id, 
-          sku: "ATENDIMENTO", 
+          // SOLUÇÃO: Puxa o SKU do banco ou usa ATENDIMENTO como fallback
+          sku: svc.code || "ATENDIMENTO", 
           name: svc.name, 
           type: "service" as const, 
           displayPrice: svc.price,
@@ -238,7 +241,6 @@ export default function PDVPage() {
   };
 
   const selectSuggestedItem = (item: SuggestedItem) => {
-    // Agora enviamos sku e barcode perfeitamente mapeados para o Zustand
     addItem({ 
       id: item.id, 
       sku: item.sku, 
@@ -317,7 +319,7 @@ export default function PDVPage() {
         <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
           <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2 space-y-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
                   <Banknote className="h-6 w-6 text-blue-600" /> Prontos para Pagamento
                 </h2>
