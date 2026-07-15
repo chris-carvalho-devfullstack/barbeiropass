@@ -7,12 +7,18 @@ import {
   Users,
   DollarSign,
   LayoutDashboard,
-  Settings,
   Package,
   Calendar,
   ListOrdered, 
   Calculator,
   IdCard,
+  User,
+  Clock,
+  Trophy,
+  MapPin,
+  Palette,
+  CalendarClock,
+  Building2
 } from "lucide-react";
 
 import {
@@ -30,7 +36,8 @@ import {
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const items = [
+// 1. Grupo de Gestão Principal (Operação Diária)
+const mainItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "PDV", url: "/pdv", icon: Calculator },
   { title: "Fila Virtual", url: "/fila", icon: ListOrdered },
@@ -40,13 +47,26 @@ const items = [
   { title: "Clientes (CRM)", url: "/clientes", icon: Users },
   { title: "Equipe", url: "/equipe", icon: IdCard },
   { title: "Fluxo de Caixa", url: "#", icon: DollarSign },
-  { title: "Configurações", url: "#", icon: Settings },
+];
+
+// 2. Grupo de Configurações da Barbearia (Global - RBAC)
+const configItems = [
+  { title: "Dados Gerais", url: "/configuracoes", icon: Building2 },
+  { title: "Expediente da Loja", url: "/configuracoes/horarios", icon: Clock },
+  { title: "Endereço", url: "/configuracoes/endereco", icon: MapPin },
+  { title: "Aparência", url: "/configuracoes/aparencia", icon: Palette },
+];
+
+// 3. Grupo do Profissional (Individual)
+const profileItems = [
+  { title: "Meus Dados", url: "/perfil", icon: User },
+  { title: "Meus Horários", url: "/perfil/horarios", icon: CalendarClock },
+  { title: "Conquistas", url: "/perfil/conquistas", icon: Trophy },
 ];
 
 export function AppSidebar() {
   const [mounted, setMounted] = React.useState(false);
   
-  // 1. Extraímos isMobile e setOpenMobile do hook useSidebar
   const { state, isMobile, setOpenMobile } = useSidebar();
 
   React.useEffect(() => {
@@ -54,6 +74,12 @@ export function AppSidebar() {
   }, []);
 
   if (!mounted) return <Sidebar collapsible="icon" />;
+
+  const handleLinkClick = () => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -72,23 +98,17 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <TooltipProvider delayDuration={0}>
-        <SidebarContent>
+        <SidebarContent className="gap-0">
+          
+          {/* SEÇÃO 1: OPERACIONAL */}
           <SidebarGroup>
-            <SidebarGroupLabel>Gestão Principal</SidebarGroupLabel>
+            <SidebarGroupLabel>Gestão</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {items.map((item) => (
+                {mainItems.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild tooltip={item.title}>
-                      <Link 
-                        href={item.url}
-                        // 2. Adicionamos o evento onClick para fechar o menu apenas no mobile
-                        onClick={() => {
-                          if (isMobile) {
-                            setOpenMobile(false);
-                          }
-                        }}
-                      >
+                      <Link href={item.url} onClick={handleLinkClick}>
                         <item.icon className="size-4" />
                         <span>{item.title}</span>
                       </Link>
@@ -98,6 +118,45 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+
+          {/* SEÇÃO 2: PROFISSIONAL / USUÁRIO */}
+          <SidebarGroup>
+            <SidebarGroupLabel>Meu Perfil</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {profileItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild tooltip={item.title}>
+                      <Link href={item.url} onClick={handleLinkClick}>
+                        <item.icon className="size-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          {/* SEÇÃO 3: ADMINISTRAÇÃO DA BARBEARIA */}
+          <SidebarGroup>
+            <SidebarGroupLabel>Barbearia</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {configItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild tooltip={item.title}>
+                      <Link href={item.url} onClick={handleLinkClick}>
+                        <item.icon className="size-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
         </SidebarContent>
       </TooltipProvider>
       <SidebarRail />

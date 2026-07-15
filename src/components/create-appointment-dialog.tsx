@@ -23,7 +23,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
-// CORREÇÃO: Tipo atualizado para coincidir com o envio da page.tsx (services é um Array)
 export type AppointmentData = {
   id: string;
   scheduled_at: string;
@@ -103,6 +102,10 @@ export function CreateAppointmentDialog({
   const [sugestoes, setSugestoes] = useState<SugestaoCliente[]>([]);
   const [options, setOptions] = useState<OptionsData | null>(null);
 
+  // Novos estados para o Motor de Disponibilidade
+  const [availableSlots, setAvailableSlots] = useState<string[]>([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+
   const form = useForm<AppointmentFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { 
@@ -120,7 +123,6 @@ export function CreateAppointmentDialog({
     if (isModalOpen && isEditing && appointmentToEdit) {
       const dt = new Date(appointmentToEdit.scheduled_at);
       
-      // CORREÇÃO: Extrair IDs dos múltiplos serviços do array
       const extractedServiceIds = appointmentToEdit.services 
         ? appointmentToEdit.services.map(s => s.id) 
         : [];
@@ -183,7 +185,7 @@ export function CreateAppointmentDialog({
 
   const selectedServiceIds = form.watch("service_ids");
   const selectedDate = form.watch("scheduled_date");
-  const selectedTime = form.watch("scheduled_time");
+  const selectedBarber = form.watch("barber_id");
   
   const totais = useMemo(() => {
     if (!options) return { tempo: 0, preco: 0 };
@@ -193,14 +195,63 @@ export function CreateAppointmentDialog({
     }, { tempo: 0, preco: 0 });
   }, [selectedServiceIds, options]);
 
-  const timeSlots = useMemo(() => {
-    const slots = [];
-    for (let h = 9; h <= 19; h++) {
-      slots.push(`${h.toString().padStart(2, '0')}:00`);
-      slots.push(`${h.toString().padStart(2, '0')}:30`);
+  // Efeito principal: Busca os horários dinâmicos na API
+  useEffect(() => {
+    async function fetchSlots() {
+      const barberToUse = selectedBarber || options?.currentUserId;
+      if (!barberToUse || !selectedDate) {
+        setAvailableSlots([]);
+        return;
+      }
+
+      setIsLoadingSlots(true);
+      // Se nenhum serviço foi selecionado, assumimos 30min só para mostrar os slots base
+      const durationToUse = totais.tempo > 0 ? totais.tempo : 30;
+
+      try {
+        const res = await fetch(`/api/agendamentos/disponibilidade?barber_id=${barberToUse}&date=${selectedDate}&duration=${durationToUse}`);
+        const result = await res.json();
+
+        if (res.ok && result.data) {
+          // CORREÇÃO 1: Usando const ao invés de let para agradar o ESLint
+          const fetchedSlots = result.data as string[];
+
+          // Fallback de edição: Se for o mesmo dia do agendamento sendo editado, insere o horário original 
+          // na lista caso o banco o tenha ocultado por já estar "ocupado" por ele mesmo.
+          if (isEditing && appointmentToEdit) {
+            const editDate = format(new Date(appointmentToEdit.scheduled_at), "yyyy-MM-dd");
+            const editTime = format(new Date(appointmentToEdit.scheduled_at), "HH:mm");
+            
+            if (selectedDate === editDate && !fetchedSlots.includes(editTime)) {
+              fetchedSlots.push(editTime);
+              fetchedSlots.sort(); // Reordena cronologicamente
+            }
+          }
+
+          setAvailableSlots(fetchedSlots);
+
+          // Se o horário atualmente selecionado não está mais disponível nas novas regras, reseta o campo
+          const currentSelectedTime = form.getValues("scheduled_time");
+          if (currentSelectedTime && !fetchedSlots.includes(currentSelectedTime)) {
+            form.setValue("scheduled_time", "");
+          }
+
+        } else {
+          setAvailableSlots([]);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar disponibilidade:", error);
+        setAvailableSlots([]);
+      } finally {
+        setIsLoadingSlots(false);
+      }
     }
-    return slots;
-  }, []);
+
+    // Só busca se o modal estiver aberto
+    if (isModalOpen) {
+      fetchSlots();
+    }
+  }, [selectedDate, totais.tempo, selectedBarber, options?.currentUserId, isModalOpen, isEditing, appointmentToEdit, form]);
 
   async function onSubmit(values: AppointmentFormValues) {
     setIsSubmitting(true);
@@ -316,7 +367,8 @@ export function CreateAppointmentDialog({
                           </Button>
                         </FormControl>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
+                      {/* CORREÇÃO 2: Atualizado w-[var(...)] para w-(--radix-popover-trigger-width) */}
+                      <PopoverContent className="w-(--radix-popover-trigger-width) p-0 border-slate-200 shadow-xl rounded-xl overflow-hidden bg-white">
                         <Command shouldFilter={false}>
                           <CommandInput placeholder="Pesquise por nome..." onValueChange={setSearchTerm} className="h-12"/>
                           <CommandList>
@@ -385,34 +437,45 @@ export function CreateAppointmentDialog({
 
                 {selectedDate && (
                   <div className="space-y-2">
-                    <p className="text-xs font-bold text-slate-500 uppercase">Horários</p>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-bold text-slate-500 uppercase">Horários Disponíveis</p>
+                      {isLoadingSlots && <Loader2 className="size-3 animate-spin text-blue-500" />}
+                    </div>
+                    
                     <FormField
                       control={form.control} name="scheduled_time"
                       render={({ field }) => (
                         <FormItem>
-                          <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto pr-1">
-                            {timeSlots.map((time) => {
-                              const isOccupied = time === "12:00" && selectedDate === format(new Date(), "yyyy-MM-dd");
-                              const isSelected = field.value === time;
+                          {isLoadingSlots ? (
+                            <div className="flex justify-center items-center h-20 text-slate-400 text-sm font-medium">
+                              Calculando disponibilidade...
+                            </div>
+                          ) : availableSlots.length === 0 ? (
+                            <div className="flex justify-center items-center h-20 text-slate-500 text-sm font-medium bg-white rounded-xl border border-slate-200 border-dashed">
+                              Nenhum horário compatível encontrado.
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto pr-1">
+                              {availableSlots.map((time) => {
+                                const isSelected = field.value === time;
 
-                              return (
-                                <div
-                                  key={time}
-                                  onClick={() => !isOccupied && field.onChange(time)}
-                                  className={cn(
-                                    "flex items-center justify-center p-2 rounded-lg text-sm font-bold border transition-all cursor-pointer",
-                                    isOccupied 
-                                      ? "bg-slate-100 text-slate-400 border-slate-200 opacity-60 cursor-not-allowed line-through"
-                                      : isSelected
-                                      ? "bg-blue-600 text-white border-blue-600 shadow-md"
-                                      : "bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:text-blue-700"
-                                  )}
-                                >
-                                  {time}
-                                </div>
-                              );
-                            })}
-                          </div>
+                                return (
+                                  <div
+                                    key={time}
+                                    onClick={() => field.onChange(time)}
+                                    className={cn(
+                                      "flex items-center justify-center p-2 rounded-lg text-sm font-bold border transition-all cursor-pointer",
+                                      isSelected
+                                        ? "bg-blue-600 text-white border-blue-600 shadow-md"
+                                        : "bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:text-blue-700"
+                                    )}
+                                  >
+                                    {time}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                           <FormMessage />
                         </FormItem>
                       )}
@@ -425,7 +488,8 @@ export function CreateAppointmentDialog({
             {options && options.services.length > 0 && (
               <div className="pt-2">
                 <FormLabel className="font-bold text-slate-700 mb-2 block">Serviços do Atendimento</FormLabel>
-                <div className="grid grid-cols-2 gap-2 max-h-[160px] overflow-y-auto pr-1">
+                {/* CORREÇÃO 3: Substituído max-h-[160px] por max-h-40 */}
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
                   {options.services.map(servico => {
                     const isSelected = selectedServiceIds.includes(servico.id);
                     return (
@@ -465,7 +529,7 @@ export function CreateAppointmentDialog({
             </div>
 
             <DialogFooter className="pt-4 border-t border-slate-100">
-              <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black h-14 rounded-2xl shadow-lg shadow-blue-600/20 transition-all active:scale-[0.98]" disabled={isSubmitting}>
+              <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black h-14 rounded-2xl shadow-lg shadow-blue-600/20 transition-all active:scale-[0.98]" disabled={isSubmitting || availableSlots.length === 0}>
                 {isSubmitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : (isEditing ? "Salvar Alterações" : "Confirmar Agendamento")}
               </Button>
             </DialogFooter>

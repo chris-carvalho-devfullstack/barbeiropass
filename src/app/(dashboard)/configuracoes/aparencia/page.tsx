@@ -2,7 +2,7 @@
 
 import { useState, useEffect, ComponentPropsWithoutRef } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { updateAppearance, updateBarbershopSettings, BarbershopSettingsData } from "../actions";
+import { updateAppearance, updateBarbershopSettings, BarbershopSettingsData } from "../../perfil/actions";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
