@@ -7,14 +7,19 @@ import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, Users, Clock, Scissors, Star, MessageSquare, BellRing } from "lucide-react"; 
+import { 
+  Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, 
+  Users, Clock, Scissors, Star, MessageSquare, BellRing, Zap, ShieldCheck
+} from "lucide-react"; 
 import { type User } from "@supabase/supabase-js"; 
 import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import Image from "next/image";
+import { cn } from "@/lib/utils";
 
 interface Barber {
   id: string;
   full_name: string;
+  avatar_url?: string | null;
 }
 
 interface QueueFormProps {
@@ -41,7 +46,9 @@ interface QueueRowPayload {
 
 export default function QueueForm({ barbershopId, barbershopName, barbers, user, isLocal, initialWaitingCount, initialQueueData, initialUserPosition }: QueueFormProps) {
   
-  // Função auxiliar para identificar se o status representa o fim da jornada na fila
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const isTerminalStatus = (status: string | null) => status === "awaiting_payment" || status === "completed";
 
   const [waitingCount, setWaitingCount] = useState(initialWaitingCount);
@@ -65,7 +72,6 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
-  // REFERÊNCIA TIPADA PARA EVITAR O ERRO 'ANY'
   const turnstileRef = useRef<TurnstileInstance>(null); 
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   
@@ -86,6 +92,10 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
       hour: "2-digit", minute: "2-digit",
       timeZone: "America/Sao_Paulo"
     });
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   };
 
   const updateGlobalCountAndPosition = useCallback(async () => {
@@ -263,6 +273,9 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
       setIsSubmittingReview(false);
     }
   };
+
+  // Prevenção de Hydration Mismatch inicial
+  if (!mounted) return null; 
 
   return (
     <div className="w-full space-y-6">
@@ -466,36 +479,98 @@ export default function QueueForm({ barbershopId, barbershopName, barbers, user,
           {user && isLocal && (
             <div className="w-full space-y-6 animate-in fade-in">
               
-              <div className="w-full bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4 mt-2">
-                <Label className="flex items-center justify-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest">
+              <div className="w-full mt-4">
+                <Label className="flex items-center justify-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest mb-4">
                   <Scissors className="size-4 text-blue-500" />
-                  Quem vai te atender?
+                  Preferência de Barbeiro?
                 </Label>
                 
-                <Select value={selectedBarberId} onValueChange={setSelectedBarberId}>
-                  <SelectTrigger className="w-full h-14 bg-slate-50 border-2 border-slate-100 hover:border-slate-200 rounded-2xl text-base font-bold text-slate-700 transition-all focus:ring-4 focus:ring-blue-50 focus:border-blue-500 shadow-none">
-                    <SelectValue placeholder="Selecione o profissional" />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-2xl border-slate-100 shadow-xl overflow-hidden p-1">
-                    <SelectItem value="next" className="font-black text-blue-600 focus:bg-blue-50 py-3 cursor-pointer rounded-xl mb-1">
-                      ⚡ Qualquer um (Mais Rápido)
-                    </SelectItem>
-                    {barbers.map((b) => (
-                      <SelectItem key={b.id} value={b.id} className="font-bold text-slate-700 py-3 cursor-pointer rounded-xl">
-                        {b.full_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div 
+                  className="flex gap-3 overflow-x-auto pb-4 pt-1 snap-x [&::-webkit-scrollbar]:hidden"
+                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                >
+                  
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBarberId("next")}
+                    className={cn(
+                      "snap-start shrink-0 w-28 flex flex-col items-center justify-center gap-3 p-4 rounded-2xl border-2 transition-all active:scale-[0.98]",
+                      selectedBarberId === "next" 
+                        ? "border-blue-500 bg-blue-50/50 shadow-sm" 
+                        : "border-slate-100 bg-white hover:border-slate-200"
+                    )}
+                  >
+                    <div className={cn(
+                      "w-12 h-12 rounded-full flex items-center justify-center transition-colors",
+                      selectedBarberId === "next" ? "bg-blue-500 text-white" : "bg-slate-100 text-slate-500"
+                    )}>
+                      <Zap className="size-6" />
+                    </div>
+                    <div className="text-center w-full">
+                      <p className={cn("text-xs font-black line-clamp-1", selectedBarberId === "next" ? "text-blue-700" : "text-slate-700")}>Qualquer um</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Mais Rápido</p>
+                    </div>
+                  </button>
+
+                  {barbers.map((b) => {
+                    const isSelected = selectedBarberId === b.id;
+                    const firstName = b.full_name.split(' ')[0];
+                    
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => setSelectedBarberId(b.id)}
+                        className={cn(
+                          "snap-start shrink-0 w-28 flex flex-col items-center justify-center gap-3 p-4 rounded-2xl border-2 transition-all active:scale-[0.98]",
+                          isSelected 
+                            ? "border-blue-500 bg-blue-50/50 shadow-sm" 
+                            : "border-slate-100 bg-white hover:border-slate-200"
+                        )}
+                      >
+                        {b.avatar_url ? (
+                          <Image 
+                            src={b.avatar_url} 
+                            alt={firstName} 
+                            width={48}
+                            height={48}
+                            className={cn(
+                              "w-12 h-12 rounded-full object-cover shadow-sm transition-all",
+                              isSelected ? "ring-2 ring-blue-500 ring-offset-2" : "border border-slate-200"
+                            )} 
+                          />
+                        ) : (
+                          <div className={cn(
+                            "w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm shadow-sm transition-all",
+                            isSelected ? "bg-blue-500 text-white ring-2 ring-blue-500 ring-offset-2" : "bg-slate-200 text-slate-500 border border-slate-300"
+                          )}>
+                            {getInitials(b.full_name)}
+                          </div>
+                        )}
+                        <div className="text-center w-full">
+                          <p className={cn("text-xs font-bold line-clamp-1", isSelected ? "text-blue-700" : "text-slate-700")}>{firstName}</p>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Barbeiro</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="flex justify-center w-full min-h-16.25">
-                <Turnstile ref={turnstileRef} siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
+              {/* CARD DE VERIFICAÇÃO DE SEGURANÇA PREMIUM */}
+              <div className="flex justify-center w-full min-h-[100px] mt-2 mb-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center w-full space-y-3 shadow-sm">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <ShieldCheck className="size-4 text-emerald-500" />
+                    <span>Validação de Segurança</span>
+                  </div>
+                  <Turnstile ref={turnstileRef} siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} onSuccess={(token) => setTurnstileToken(token)} options={{ theme: "light" }} />
+                </div>
               </div>
               
               <div className="space-y-4">
                 <Button onClick={handleJoinQueue} disabled={loading || !turnstileToken} className="w-full h-16 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98]">
-                  {loading ? <Loader2 className="animate-spin size-6" /> : <div className="flex items-center gap-2"><Sparkles className="size-5" /><span>Confirmar Entrada na Fila</span></div>}
+                  {loading ? <Loader2 className="animate-spin size-6" /> : <div className="flex items-center gap-2"><Sparkles className="size-5" /><span>Entrar na Fila</span></div>}
                 </Button>
                 <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2"><LogOut size={14} />Não é você? Trocar de conta</button>
               </div>

@@ -38,13 +38,38 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
 
   if (error || !barbershop) notFound();
 
-  // >>> BUSCA DA LISTA DE BARBEIROS ATIVOS PARA A FILA <<<
-  const { data: barbers } = await supabase
+  // >>> NOVO: OBTÉM O DIA DA SEMANA NO FUSO DE BRASÍLIA <<<
+  // 0 = Domingo, 1 = Segunda, etc.
+  const brazilTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const currentDow = brazilTime.getDay();
+
+  // >>> BUSCA INTELIGENTE COM INNER JOIN (MOTOR DE DISPONIBILIDADE) <<<
+  const { data: rawBarbers } = await supabase
     .from("staff")
-    .select("id, full_name, avatar_url")
+    .select(`
+      id, 
+      full_name, 
+      avatar_url,
+      staff_working_hours!inner (
+        day_of_week,
+        is_active,
+        service_mode
+      )
+    `)
     .eq("barbershop_id", barbershop.id)
     .eq("role", "barber")
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("staff_working_hours.day_of_week", currentDow) // Filtra para o dia exato de hoje
+    .eq("staff_working_hours.is_active", true)         // Profissional deve trabalhar hoje
+    .in("staff_working_hours.service_mode", ["queue", "hybrid"]); // Exige que o modo suporte Fila
+
+  // Sanitização Zero-Trust: Limpa os dados do banco antes de enviar para o cliente (Frontend)
+  // Isso impede vazamento da estrutura relacional (staff_working_hours) no código da página.
+  const barbers = rawBarbers?.map(b => ({
+    id: b.id,
+    full_name: b.full_name,
+    avatar_url: b.avatar_url
+  })) || [];
 
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -74,8 +99,6 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       let isActuallyRated = data.is_rated;
       
       // >>> A MÁGICA DA DUPLA CHECAGEM AQUI <<<
-      // Se a fila diz que não foi avaliado, mas já está finalizado, nós verificamos 
-      // diretamente a tabela de avaliações para driblar o cache e falhas do RLS
       if (!isActuallyRated && data.status === "finished") {
         const { count } = await supabase
           .from("reviews")
@@ -84,12 +107,10 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
           
         if (count && count > 0) {
           isActuallyRated = true;
-          // Tenta atualizar a flag silenciosamente para corrigir o banco no futuro
           await supabase.from("virtual_queue").update({ is_rated: true }).eq("id", data.id);
         }
       }
 
-      // Agora usamos a flag isActuallyRated que é 100% confiável
       if (!(data.status === "finished" && isActuallyRated === true)) {
         initialQueueData = {
           id: data.id,
@@ -150,7 +171,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
             <QueueForm 
               barbershopId={barbershop.id} 
               barbershopName={barbershop.name}
-              barbers={barbers || []} // NOVA PROP
+              barbers={barbers} // ARRAY LIMPO E SEGURO
               user={user} 
               isLocal={isLocal}
               initialWaitingCount={initialWaitingCount}
