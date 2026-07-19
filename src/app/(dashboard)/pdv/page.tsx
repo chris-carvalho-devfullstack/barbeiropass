@@ -6,13 +6,12 @@ import { usePDVStore, SelectedClient } from "@/store/use-pdv-store";
 import { 
   searchItemsAction, 
   processCheckout, 
-  searchClientForPDV, 
-  quickCreateClient 
+  searchClientForPDV 
 } from "./actions";
 import { toast } from "sonner";
 import { 
   Barcode, Trash2, CreditCard, Banknote, QrCode, Loader2, 
-  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, X, UserPlus, Sparkles, Scissors, ChevronRight
+  Search, Plus, Minus, ShoppingBag, User, Users, CalendarClock, X, UserPlus, Sparkles, Scissors, ChevronRight, Mail, Phone
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -20,6 +19,10 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 import { createClient } from "@/utils/supabase/client";
+
+import { z } from "zod";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 
 // =========================================================================
 // TIPAGENS DE ESTRUTURA E APIs
@@ -30,8 +33,8 @@ type SuggestedItem = {
   id: string; 
   name: string; 
   price: number; 
-  sku?: string; // Corrigido de code para sku
-  barcode?: string; // Adicionado suporte ao código de barras
+  sku?: string; 
+  barcode?: string; 
   type: "product" | "service"; 
 };
 
@@ -42,7 +45,6 @@ type ClientSuggestion = {
   phone?: string | null;
 };
 
-// ADICIONADO: Suporte ao campo code que vem da API
 type PendingService = { id: string; name: string; price: number; code?: string | null; };
 
 type PendingClient = {
@@ -66,8 +68,40 @@ type StaffMember = {
   full_name: string;
 };
 
+// =========================================================================
+// VALIDAÇÃO ZOD PARA CRIAÇÃO RÁPIDA DE CLIENTE (SEM ANY, APENAS STRING)
+// =========================================================================
+const quickClientSchema = z.object({
+  name: z.string().min(3, "O nome deve ter no mínimo 3 caracteres."),
+  phone: z.string().refine((val) => {
+    const clean = val.replace(/\D/g, "");
+    return clean === "" || clean.length === 10 || clean.length === 11;
+  }, {
+    message: "Telefone incompleto ou inválido.",
+  }),
+  email: z.string().refine((val) => {
+    return val === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val);
+  }, {
+    message: "Formato de e-mail inválido.",
+  }),
+});
+
+type QuickClientFormValues = z.infer<typeof quickClientSchema>;
+
+// Máscara visual em tempo real (ex: (11) 99999-9999)
+const applyPhoneMask = (value: string): string => {
+  let v = value.replace(/\D/g, "");
+  if (v.length <= 10) {
+    v = v.replace(/^(\d{2})(\d)/g, "($1) $2");
+    v = v.replace(/(\d{4})(\d)/, "$1-$2");
+  } else {
+    v = v.replace(/^(\d{2})(\d)/g, "($1) $2");
+    v = v.replace(/(\d{5})(\d)/, "$1-$2");
+  }
+  return v.substring(0, 15);
+};
+
 export default function PDVPage() {
-  
   const { 
     isSaleActive, client, items, startSale, cancelSale, 
     addItem, removeItem, updateQuantity, updateItemBarber, getCartTotal, clearCart 
@@ -90,6 +124,9 @@ export default function PDVPage() {
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
 
+  // Estados para o novo formulário de criação rápida
+  const [isCreatingClient, setIsCreatingClient] = useState(false);
+
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [checkoutContext, setCheckoutContext] = useState<CheckoutContext>({ sourceId: null, sourceType: null });
 
@@ -97,6 +134,23 @@ export default function PDVPage() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const supabase = createClient();
+
+  // Configuração do formulário React Hook Form com Zod perfeitamente sincronizado
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    reset,
+    formState: { errors, isSubmitting }
+  } = useForm<QuickClientFormValues>({
+    resolver: zodResolver(quickClientSchema),
+    mode: "onChange", 
+    defaultValues: {
+      name: "",
+      phone: "",
+      email: ""
+    }
+  });
 
   useEffect(() => {
     const fetchStaff = async () => {
@@ -165,7 +219,7 @@ export default function PDVPage() {
 
   useEffect(() => {
     const delay = setTimeout(async () => {
-      if (clientSearch.trim().length >= 3) {
+      if (clientSearch.trim().length >= 3 && !isCreatingClient) {
         setIsSearchingClient(true);
         const res = await searchClientForPDV(clientSearch) as { results?: ClientSuggestion[] };
         setClientSuggestions(res?.results || []);
@@ -175,7 +229,7 @@ export default function PDVPage() {
       }
     }, 300);
     return () => clearTimeout(delay);
-  }, [clientSearch]);
+  }, [clientSearch, isCreatingClient]);
 
   useEffect(() => {
     const delay = setTimeout(async () => {
@@ -194,7 +248,6 @@ export default function PDVPage() {
   const handleStartSale = (
     selectedClient: SelectedClient | null, 
     context?: CheckoutContext, 
-    // ADICIONADO: Suporte ao code aqui também
     servicesToImport?: { id: string; name: string; price: number; barberId: string | null; code?: string | null }[],
     activeBarberId?: string | null
   ) => {
@@ -207,7 +260,6 @@ export default function PDVPage() {
       servicesToImport.forEach(svc => {
         const newItem = { 
           id: svc.id, 
-          // SOLUÇÃO: Puxa o SKU do banco ou usa ATENDIMENTO como fallback
           sku: svc.code || "ATENDIMENTO", 
           name: svc.name, 
           type: "service" as const, 
@@ -221,6 +273,8 @@ export default function PDVPage() {
 
     setClientSearch("");
     setClientSuggestions([]);
+    setIsCreatingClient(false);
+    reset();
   };
 
   const handleCancelSale = () => {
@@ -228,16 +282,35 @@ export default function PDVPage() {
     setCheckoutContext({ sourceId: null, sourceType: null });
   };
 
-  const handleQuickCreateClient = async () => {
-    setIsSearchingClient(true);
-    const res = await quickCreateClient(clientSearch) as { client?: SelectedClient; error?: string };
-    if (res.client) {
-      handleStartSale(res.client);
-      toast.success("Cliente cadastrado e vinculado na hora!");
-    } else {
-      toast.error(res.error || "Erro ao cadastrar.");
+  // Nova função de submissão do formulário API-First (Fetch direto)
+  const onSubmitCreateClient = async (data: QuickClientFormValues) => {
+    try {
+      const response = await fetch('/api/pdv/quick-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      const resData = await response.json();
+
+      if (!response.ok || resData.error) {
+        toast.error(resData.error || "Erro ao cadastrar cliente.");
+        return;
+      }
+
+      if (resData.customer) {
+        handleStartSale({
+          id: resData.customer.id,
+          name: resData.customer.name,
+          document: resData.customer.cpf,
+          phone: resData.customer.phone
+        });
+        toast.success("Cliente vinculado com sucesso!");
+      }
+    } catch (error) {
+      console.error("Erro na criação do cliente:", error); // <-- Uso obrigatório da variável para evitar erro no linter
+      toast.error("Erro interno de comunicação.");
     }
-    setIsSearchingClient(false);
   };
 
   const selectSuggestedItem = (item: SuggestedItem) => {
@@ -429,45 +502,128 @@ export default function PDVPage() {
             <div className="space-y-6">
               <h2 className="text-xl font-black text-slate-900">Novo Atendimento</h2>
               
-              <div className="bg-white p-6 rounded-[2rem] border border-slate-200/70 shadow-sm relative">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Buscar Cliente ou Cadastrar</label>
-                <div className="relative">
-                  <Input 
-                    placeholder="Nome, CPF ou Celular..." 
-                    value={clientSearch} 
-                    onChange={(e) => setClientSearch(e.target.value)} 
-                    className="h-14 bg-slate-50 border-slate-200 rounded-xl text-base focus-visible:ring-blue-600/20 px-4" 
-                    autoComplete="off"
-                  />
-                  {isSearchingClient && <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-5 w-5 text-blue-500 animate-spin" />}
-                  
-                  {clientSuggestions.length > 0 && (
-                    <div className="absolute left-0 right-0 top-[110%] bg-white border border-slate-200/80 shadow-xl rounded-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
-                      {clientSuggestions.map((c) => (
-                        <button key={c.id} onClick={() => handleStartSale({ id: c.id, name: c.name, document: c.document, phone: c.phone })} className="w-full text-left p-4 hover:bg-slate-50 border-b border-slate-100 last:border-0 font-bold text-sm text-slate-800 transition-colors">
-                          <p className="text-base">{c.name}</p>
-                          <p className="text-xs font-normal text-slate-500 font-mono mt-0.5">{c.document || c.phone || 'Sem documento registrado'}</p>
-                        </button>
-                      ))}
+              <div className="bg-white p-6 rounded-[2rem] border border-slate-200/70 shadow-sm relative transition-all duration-300">
+                
+                {isCreatingClient ? (
+                  // ==========================================
+                  // FORMULÁRIO DE CRIAÇÃO RÁPIDA (ZOD + RHF)
+                  // ==========================================
+                  <form onSubmit={handleSubmit(onSubmitCreateClient)} className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                    <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                      <h3 className="font-black text-lg text-slate-900">Cadastrar Cliente</h3>
+                      <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:bg-slate-100 hover:text-slate-700 rounded-full" onClick={() => { setIsCreatingClient(false); reset(); }}>
+                        <X className="h-4 w-4" />
+                      </Button>
                     </div>
-                  )}
 
-                  {clientSearch.length >= 3 && clientSuggestions.length === 0 && !isSearchingClient && (
-                    <button onClick={handleQuickCreateClient} className="absolute left-0 right-0 top-[110%] z-50 w-full flex items-center justify-center gap-2 p-4 bg-blue-600 text-white hover:bg-blue-700 rounded-xl font-bold shadow-lg transition-colors animate-in fade-in slide-in-from-top-2">
-                      <UserPlus className="h-5 w-5" /> Cadastrar &quot;{clientSearch}&quot;
-                    </button>
-                  )}
-                </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">Nome Completo *</label>
+                        <div className="relative mt-1">
+                          <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                          <Input 
+                            {...register("name")} 
+                            placeholder="Ex: João da Silva" 
+                            className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.name ? 'border-red-400 focus-visible:ring-red-400/20' : ''}`} 
+                          />
+                        </div>
+                        {errors.name && <span className="text-xs text-red-500 font-medium ml-1 mt-1 block">{errors.name.message}</span>}
+                      </div>
 
-                <div className="flex items-center gap-4 py-6">
-                  <div className="h-px bg-slate-100 flex-1" />
-                  <span className="text-[10px] font-black text-slate-300 uppercase">ou</span>
-                  <div className="h-px bg-slate-100 flex-1" />
-                </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">WhatsApp</label>
+                        <div className="relative mt-1">
+                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                          <Input 
+                            {...register("phone")} 
+                            placeholder="(11) 99999-9999" 
+                            maxLength={15}
+                            onChange={(e) => {
+                              const masked = applyPhoneMask(e.target.value);
+                              e.target.value = masked;
+                              setValue("phone", masked, { shouldValidate: true });
+                            }}
+                            className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.phone ? 'border-red-400 focus-visible:ring-red-400/20' : ''}`} 
+                          />
+                        </div>
+                        {errors.phone && <span className="text-xs text-red-500 font-medium ml-1 mt-1 block">{errors.phone.message}</span>}
+                      </div>
 
-                <Button size="lg" variant="outline" className="w-full h-14 rounded-xl border-slate-200 text-slate-600 font-bold text-base hover:bg-slate-50 hover:text-slate-900 transition-colors" onClick={() => handleStartSale(null)}>
-                  <ShoppingBag className="mr-2 h-5 w-5" /> Venda Balcão (Avulso)
-                </Button>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">E-mail</label>
+                        <div className="relative mt-1">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                          <Input 
+                            {...register("email")} 
+                            type="email"
+                            placeholder="joao@email.com" 
+                            className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.email ? 'border-red-400 focus-visible:ring-red-400/20' : ''}`} 
+                          />
+                        </div>
+                        {errors.email && <span className="text-xs text-red-500 font-medium ml-1 mt-1 block">{errors.email.message}</span>}
+                      </div>
+                    </div>
+
+                    <Button type="submit" disabled={isSubmitting} className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl mt-4 shadow-md transition-transform active:scale-[0.98]">
+                      {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : "Salvar e Iniciar Venda"}
+                    </Button>
+                  </form>
+                ) : (
+                  // ==========================================
+                  // BARRA DE BUSCA PADRÃO
+                  // ==========================================
+                  <>
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Buscar Cliente ou Cadastrar</label>
+                    <div className="relative">
+                      <Input 
+                        placeholder="Nome, CPF ou Celular..." 
+                        value={clientSearch} 
+                        onChange={(e) => setClientSearch(e.target.value)} 
+                        className="h-14 bg-slate-50 border-slate-200 rounded-xl text-base focus-visible:ring-blue-600/20 px-4" 
+                        autoComplete="off"
+                      />
+                      {isSearchingClient && <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-5 w-5 text-blue-500 animate-spin" />}
+                      
+                      {clientSuggestions.length > 0 && (
+                        <div className="absolute left-0 right-0 top-[110%] bg-white border border-slate-200/80 shadow-xl rounded-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                          {clientSuggestions.map((c) => (
+                            <button key={c.id} onClick={() => handleStartSale({ id: c.id, name: c.name, document: c.document, phone: c.phone })} className="w-full text-left p-4 hover:bg-slate-50 border-b border-slate-100 last:border-0 font-bold text-sm text-slate-800 transition-colors">
+                              <p className="text-base">{c.name}</p>
+                              <p className="text-xs font-normal text-slate-500 font-mono mt-0.5">{c.document || c.phone || 'Sem documento registrado'}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {clientSearch.length >= 3 && clientSuggestions.length === 0 && !isSearchingClient && (
+                        <button 
+                          onClick={() => {
+                            setIsCreatingClient(true);
+                            setValue("name", clientSearch); // Preenche o nome automaticamente com a busca
+                            setClientSearch(""); 
+                          }} 
+                          className="absolute left-0 right-0 top-[110%] z-50 w-full flex items-center justify-center gap-2 p-4 bg-blue-600 text-white hover:bg-blue-700 rounded-xl font-bold shadow-lg transition-colors animate-in fade-in slide-in-from-top-2"
+                        >
+                          <UserPlus className="h-5 w-5" /> Cadastrar &quot;{clientSearch}&quot;
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {!isCreatingClient && (
+                  <>
+                    <div className="flex items-center gap-4 py-6">
+                      <div className="h-px bg-slate-100 flex-1" />
+                      <span className="text-[10px] font-black text-slate-300 uppercase">ou</span>
+                      <div className="h-px bg-slate-100 flex-1" />
+                    </div>
+
+                    <Button size="lg" variant="outline" className="w-full h-14 rounded-xl border-slate-200 text-slate-600 font-bold text-base hover:bg-slate-50 hover:text-slate-900 transition-colors" onClick={() => handleStartSale(null)}>
+                      <ShoppingBag className="mr-2 h-5 w-5" /> Venda Balcão (Avulso)
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
 
