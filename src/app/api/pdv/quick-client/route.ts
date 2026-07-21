@@ -7,6 +7,8 @@ import { EventLogRepository } from '@/infrastructure/database/supabase/EventLogR
 import { EventLogService } from '@/domain/shared/services/EventLogService';
 import { UnauthorizedError } from '@/domain/shared/errors';
 
+export const runtime = 'edge';
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
