@@ -1,12 +1,15 @@
+// src/app/(public)/b/[slug]/page.tsx
 export const dynamic = "force-dynamic";
 export const runtime = 'edge';
-export const fetchCache = 'force-no-store'; // Garante que o Next.js NUNCA faça cache desta rota
+export const fetchCache = 'force-no-store';
 
 import { createClient } from "@/utils/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js"; // A MÁGICA AQUI
 import { notFound } from "next/navigation";
 import { Store } from "lucide-react";
 import Image from "next/image"; 
 import QueueForm from "./queue-form";
+import { cookies } from "next/headers";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -38,12 +41,9 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
 
   if (error || !barbershop) notFound();
 
-  // >>> NOVO: OBTÉM O DIA DA SEMANA NO FUSO DE BRASÍLIA <<<
-  // 0 = Domingo, 1 = Segunda, etc.
   const brazilTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
   const currentDow = brazilTime.getDay();
 
-  // >>> BUSCA INTELIGENTE COM INNER JOIN (MOTOR DE DISPONIBILIDADE) <<<
   const { data: rawBarbers } = await supabase
     .from("staff")
     .select(`
@@ -59,12 +59,10 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
     .eq("barbershop_id", barbershop.id)
     .eq("role", "barber")
     .eq("is_active", true)
-    .eq("staff_working_hours.day_of_week", currentDow) // Filtra para o dia exato de hoje
-    .eq("staff_working_hours.is_active", true)         // Profissional deve trabalhar hoje
-    .in("staff_working_hours.service_mode", ["queue", "hybrid"]); // Exige que o modo suporte Fila
+    .eq("staff_working_hours.day_of_week", currentDow) 
+    .eq("staff_working_hours.is_active", true)        
+    .in("staff_working_hours.service_mode", ["queue", "hybrid"]); 
 
-  // Sanitização Zero-Trust: Limpa os dados do banco antes de enviar para o cliente (Frontend)
-  // Isso impede vazamento da estrutura relacional (staff_working_hours) no código da página.
   const barbers = rawBarbers?.map(b => ({
     id: b.id,
     full_name: b.full_name,
@@ -84,34 +82,62 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
   let initialQueueData: InitialQueueData | null = null;
   let initialUserPosition: number | null = null;
 
-  if (user) {
-    const { data } = await supabase
-      .from("virtual_queue")
-      .select("id, status, barber_name, chair_number, is_rated, joined_at")
-      .eq("barbershop_id", barbershop.id)
-      .eq("client_auth_id", user.id)
-      .in("status", ["waiting", "in_progress", "finished"])
-      .order("joined_at", { ascending: false }) 
-      .limit(1)
-      .maybeSingle();
+  const cookieStore = await cookies();
+  const walkInQueueId = cookieStore.get("walkInQueueId")?.value;
+
+  // >>> CRIA O CLIENTE ADMIN PARA FURAR O BLOQUEIO RLS <<<
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  if (user || walkInQueueId) {
+    let data = null;
+
+    if (user) {
+      // Se tiver conta, a busca normal funciona pois o usuário é dono do ticket
+      const { data: userData } = await supabase
+        .from("virtual_queue")
+        .select("id, status, barber_name, chair_number, is_rated, joined_at")
+        .eq("barbershop_id", barbershop.id)
+        .eq("client_auth_id", user.id)
+        .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
+        .order("joined_at", { ascending: false }) 
+        .limit(1)
+        .maybeSingle();
+      data = userData;
+    } else if (walkInQueueId) {
+      // Se for AVULSO, usamos a chave Admin para ler o ticket mesmo que o RLS tente esconder!
+      const { data: anonData } = await supabaseAdmin
+        .from("virtual_queue")
+        .select("id, status, barber_name, chair_number, is_rated, joined_at")
+        .eq("barbershop_id", barbershop.id)
+        .eq("id", walkInQueueId)
+        .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
+        .order("joined_at", { ascending: false }) 
+        .limit(1)
+        .maybeSingle();
+      data = anonData;
+    }
     
     if (data) {
       let isActuallyRated = data.is_rated;
+      const isTerminalStatus = data.status === "awaiting_payment" || data.status === "completed" || data.status === "finished";
       
-      // >>> A MÁGICA DA DUPLA CHECAGEM AQUI <<<
-      if (!isActuallyRated && data.status === "finished") {
-        const { count } = await supabase
+      if (!isActuallyRated && isTerminalStatus) {
+        // Verifica se tem review com Admin Client tbm por segurança
+        const { count } = await supabaseAdmin
           .from("reviews")
           .select("*", { count: "exact", head: true })
           .eq("source_id", data.id);
           
         if (count && count > 0) {
           isActuallyRated = true;
-          await supabase.from("virtual_queue").update({ is_rated: true }).eq("id", data.id);
+          await supabaseAdmin.from("virtual_queue").update({ is_rated: true }).eq("id", data.id);
         }
       }
 
-      if (!(data.status === "finished" && isActuallyRated === true)) {
+      if (!(isTerminalStatus && isActuallyRated === true)) {
         initialQueueData = {
           id: data.id,
           status: data.status,
@@ -171,7 +197,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
             <QueueForm 
               barbershopId={barbershop.id} 
               barbershopName={barbershop.name}
-              barbers={barbers} // ARRAY LIMPO E SEGURO
+              barbers={barbers}
               user={user} 
               isLocal={isLocal}
               initialWaitingCount={initialWaitingCount}
