@@ -19,7 +19,7 @@ const reviewSchema = z.object({
   comment: z.string().trim().max(1000).optional(),
 }).superRefine((value, context) => {
   if (!value.skipped && (!value.barberRating || !value.barbershopRating)) {
-    context.addIssue({ code: "custom", message: "AvaliaÃ§Ãµes sÃ£o obrigatÃ³rias." });
+    context.addIssue({ code: "custom", message: "Avaliações são obrigatórias." });
   }
 });
 
@@ -35,9 +35,12 @@ function getCookie(request: Request, name: string): string | undefined {
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null);
+    console.log("PAYLOAD RECEBIDO DO FRONTEND:", body);
     const parsed = reviewSchema.safeParse(body);
+    
     if (!parsed.success) {
-      return NextResponse.json({ error: "AvaliaÃ§Ã£o invÃ¡lida." }, { status: 400 });
+      console.error("ERRO DE VALIDAÇÃO ZOD:", parsed.error.format());
+      return NextResponse.json({ error: "Avaliação inválida." }, { status: 400 });
     }
 
     const admin = createAdminClient();
@@ -55,19 +58,19 @@ export async function POST(request: Request) {
 
     const barbershop = await resolvePublicBarbershop(admin, parsed.data.slug);
     if (!barbershop) {
-      return NextResponse.json({ error: "Barbearia nÃ£o encontrada." }, { status: 404 });
+      return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
     }
 
     const token = getCookie(request, PUBLIC_QUEUE_ACCESS_COOKIE);
     const ticket = await getOwnedPublicQueueTicket(admin, token, barbershop.id);
     if (!ticket) {
-      return NextResponse.json({ error: "Ticket nÃ£o encontrado." }, { status: 404 });
+      return NextResponse.json({ error: "Ticket não encontrado." }, { status: 404 });
     }
 
     const terminalStatuses = ["awaiting_payment", "completed", "finished"];
     if (!terminalStatuses.includes(ticket.status) || ticket.is_rated) {
       return NextResponse.json(
-        { error: "Este atendimento nÃ£o estÃ¡ disponÃ­vel para avaliaÃ§Ã£o." },
+        { error: "Este atendimento não está disponível para avaliação." },
         { status: 409 }
       );
     }
@@ -84,7 +87,7 @@ export async function POST(request: Request) {
         source_id: ticket.id,
       });
 
-      if (reviewError) throw new Error("NÃ£o foi possÃ­vel registrar a avaliaÃ§Ã£o.");
+      if (reviewError) throw new Error("Não foi possível registrar a avaliação.");
     }
 
     const { error: queueError } = await admin
@@ -93,13 +96,13 @@ export async function POST(request: Request) {
       .eq("id", ticket.id)
       .eq("barbershop_id", barbershop.id)
       .eq("is_rated", false);
-    if (queueError) throw new Error("NÃ£o foi possÃ­vel finalizar a avaliaÃ§Ã£o.");
+    if (queueError) throw new Error("Não foi possível finalizar a avaliação.");
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[PUBLIC_QUEUE_REVIEW]", error);
     return NextResponse.json(
-      { error: "NÃ£o foi possÃ­vel enviar a avaliaÃ§Ã£o." },
+      { error: "Não foi possível enviar a avaliação." },
       { status: 500 }
     );
   }

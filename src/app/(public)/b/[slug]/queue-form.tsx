@@ -591,10 +591,13 @@ export default function QueueForm({
     if (barberRating === 0 || barbershopRating === 0) return;
     setIsSubmittingReview(true);
     try {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
+
       const res = await fetch('/api/public/queue/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
+          slug: currentSlug,
           barberName, 
           barberRating, 
           barbershopRating, 
@@ -620,10 +623,13 @@ export default function QueueForm({
   const handleSkipReview = async () => {
     setIsSubmittingReview(true);
     try {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
+
       const res = await fetch('/api/public/queue/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
+          slug: currentSlug,
           skipped: true
         })
       });
@@ -1120,7 +1126,7 @@ export default function QueueForm({
               )}
               
               <button type="button" onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
-                <LogOut size={14} /> Sair da conta
+                <LogOut size={14} /> Sair da conta Google
               </button>
             </>
           )}
