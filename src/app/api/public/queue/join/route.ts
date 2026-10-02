@@ -23,7 +23,7 @@ import {
 
 const joinQueueSchema = z.object({
   slug: publicSlugSchema,
-  turnstileToken: z.string().min(1, "Token anti-bot invÃ¡lido."),
+  turnstileToken: z.string().min(1, "Token anti-bot inválido."),
   barberId: z.string().uuid().nullable().optional(),
   clientName: z.string().trim().min(2).max(120).optional(),
   phone: z.string().trim().max(30).nullable().optional(),
@@ -38,7 +38,7 @@ async function verifyTurnstile(token: string, request: Request): Promise<boolean
 
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
-    throw new Error("ConfiguraÃ§Ã£o anti-bot indisponÃ­vel.");
+    throw new Error("Configuração anti-bot indisponível.");
   }
 
   const formData = new URLSearchParams({ secret, response: token });
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     const parsed = joinQueueSchema.safeParse(body);
 
     if (!parsed.success) {
-      return NextResponse.json({ error: "Dados invÃ¡lidos." }, { status: 400 });
+      return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });
     }
 
     const { slug, turnstileToken, barberId, clientName, phone, email, cpf } = parsed.data;
@@ -91,12 +91,12 @@ export async function POST(request: Request) {
     }
 
     if (!(await verifyTurnstile(turnstileToken, request))) {
-      return NextResponse.json({ error: "ValidaÃ§Ã£o anti-bot recusada." }, { status: 403 });
+      return NextResponse.json({ error: "Validação anti-bot recusada." }, { status: 403 });
     }
 
     const barbershop = await resolvePublicBarbershop(admin, slug);
     if (!barbershop) {
-      return NextResponse.json({ error: "Barbearia nÃ£o encontrada." }, { status: 404 });
+      return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
     }
 
     if (barberId) {
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (barberError || !barber) {
-        return NextResponse.json({ error: "Profissional indisponÃ­vel." }, { status: 400 });
+        return NextResponse.json({ error: "Profissional indisponível." }, { status: 400 });
       }
     }
 
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
         .eq("user_email", user.email)
         .maybeSingle();
 
-      if (bannedError) throw new Error("NÃ£o foi possÃ­vel validar o acesso.");
+      if (bannedError) throw new Error("Não foi possível validar o acesso.");
       if (banned) {
         return NextResponse.json({ error: "Acesso bloqueado." }, { status: 403 });
       }
@@ -160,7 +160,7 @@ export async function POST(request: Request) {
       createdFrom: "QUEUE",
     });
 
-    const activeStatuses = ["waiting", "serving", "in_progress", "in_chair"];
+    const activeStatuses = ["waiting", "in_progress", "in_chair"];
     let duplicateQuery = admin
       .from("virtual_queue")
       .select("id")
@@ -172,11 +172,15 @@ export async function POST(request: Request) {
       : duplicateQuery.eq("client_id", customer.id);
 
     const { data: existingTicket, error: duplicateError } = await duplicateQuery.maybeSingle();
-    if (duplicateError) throw new Error("NÃ£o foi possÃ­vel validar a fila atual.");
+
+    if (duplicateError) {
+      console.error("ERRO SUPABASE (duplicateQuery):", duplicateError); 
+      throw new Error("Não foi possível validar a fila atual.");
+    }
 
     if (existingTicket) {
       return NextResponse.json(
-        { error: "JÃ¡ existe um atendimento ativo para este cliente." },
+        { error: "Já existe um atendimento ativo para este cliente." },
         { status: 409 }
       );
     }
@@ -199,7 +203,7 @@ export async function POST(request: Request) {
       status: "waiting",
     });
 
-    if (queueError) throw new Error("NÃ£o foi possÃ­vel criar o ticket.");
+    if (queueError) throw new Error("Não foi possível criar o ticket.");
 
     const { error: tokenError } = await admin.from("public_queue_access_tokens").insert({
       queue_id: queueId,
@@ -211,10 +215,10 @@ export async function POST(request: Request) {
     if (tokenError) {
       await admin
         .from("virtual_queue")
-        .update({ status: "canceled" })
+        .update({ status: "cancelled" })
         .eq("id", queueId)
         .eq("barbershop_id", barbershop.id);
-      throw new Error("NÃ£o foi possÃ­vel proteger o ticket.");
+      throw new Error("Não foi possível proteger o ticket.");
     }
 
     try {
@@ -233,7 +237,7 @@ export async function POST(request: Request) {
         .eq("queue_id", queueId);
       await admin
         .from("virtual_queue")
-        .update({ status: "canceled" })
+        .update({ status: "cancelled" })
         .eq("id", queueId)
         .eq("barbershop_id", barbershop.id);
       throw eventError;
