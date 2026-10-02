@@ -14,7 +14,7 @@ export class EventLogService {
       entityType: EntityType;
       entityId: string;
       eventType: EventType;
-      performedBy?: string;
+      performedBy?: string | null;
       payload?: Record<string, unknown>;
     }
   ): Promise<void> {

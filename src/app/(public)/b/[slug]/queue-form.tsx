@@ -64,17 +64,6 @@ interface QueueFormProps {
   initialUserPosition: number | null;
 }
 
-interface QueueRowPayload {
-  id: string;
-  barbershop_id: string;
-  client_auth_id: string | null;
-  status: string;
-  barber_name: string | null;
-  chair_number: string | null;
-  is_rated: boolean;
-  joined_at: string | null;
-}
-
 const walkInSchema = z.object({
   clientName: z.string().min(2, "O nome deve ter no mínimo 2 caracteres."),
   phone: z.string().refine((val) => {
@@ -208,9 +197,6 @@ export default function QueueForm({
     handleSetQueueId(null);
     setCurrentStatus(null);
     setWalkInName(null);
-    if (typeof document !== "undefined") {
-      document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT"; 
-    }
   }, [handleSetQueueId]);
 
   const handleResetWalkInView = useCallback(() => {
@@ -221,13 +207,14 @@ export default function QueueForm({
     resetWalkInForm();
     turnstileRef.current?.reset();
     setTurnstileToken(null);
+    // Limpeza extra para prevenir estados zumbis
     if (typeof document !== "undefined") {
       document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT"; 
     }
   }, [handleSetQueueId, resetWalkInForm]);
 
   // =========================================================================
-  // SINCRONIZAÇÃO FORÇADA DE DADOS DO SERVIDOR
+  // SINCRONIZAÇÃO FORÇADA DE DADOS DO SERVIDOR (INICIAL)
   // =========================================================================
   useEffect(() => {
     if (initialQueueData) {
@@ -244,21 +231,6 @@ export default function QueueForm({
        }
     }
   }, [initialQueueData, isTerminalStatus, handleSetQueueId]);
-
-  // =========================================================================
-  // O RADAR SILENCIOSO
-  // =========================================================================
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (inQueue) {
-       interval = setInterval(() => {
-          router.refresh(); 
-       }, 8000); 
-    }
-    return () => {
-       if (interval) clearInterval(interval);
-    };
-  }, [inQueue, router]);
 
   // =========================================================================
   // TIMER: RETORNO AUTOMÁTICO PARA A TELA INICIAL
@@ -289,88 +261,104 @@ export default function QueueForm({
     };
   }, [currentStatus, hasRated, isTerminalStatus, handleResetTerminalState]);
 
-  const syncMyStatus = useCallback(async () => {
-    const activeQueueId = queueIdRef.current;
-    const currentUser = userRef.current;
-    
-    if (!currentUser && !activeQueueId) return;
-
-    let query = supabase
-      .from("virtual_queue")
-      .select("*")
-      .eq("barbershop_id", barbershopId)
-      .order("joined_at", { ascending: false })
-      .limit(1);
+  // =========================================================================
+  // NOVO FLUXO SEGURO DE BUSCA DE STATUS (API Server-side)
+  // =========================================================================
+  const fetchQueueStatus = useCallback(async () => {
+    try {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() || '' : '';
       
-    if (currentUser) {
-      query = query.eq("client_auth_id", currentUser.id);
-    } else if (activeQueueId) {
-      query = query.eq("id", activeQueueId);
-    }
-
-    const { data } = await query.maybeSingle();
-    
-    if (data) {
-      const isTerminal = isTerminalStatus(data.status);
-
-      if (isTerminal && data.is_rated) {
-         if (queueIdRef.current !== data.id) {
-           handleSetQueueId(null);
-           setCurrentStatus(null);
-           setInQueue(false);
-           if (typeof document !== "undefined") document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-           return; 
-         }
-      }
-
-      handleSetQueueId(data.id);
-      setCurrentStatus(data.status);
-      setBarberName(data.barber_name);
-      setChairNumber(data.chair_number);
-      setHasRated(data.is_rated);
-      setJoinedAt(data.joined_at);
-      setInQueue(!isTerminal);
-    }
-  }, [barbershopId, supabase, isTerminalStatus, handleSetQueueId]);
-
-  const updateGlobalCountAndPosition = useCallback(async (forcedQueueId?: string | null) => {
-    const { data: waitingList } = await supabase
-      .from("virtual_queue")
-      .select("id, client_auth_id")
-      .eq("barbershop_id", barbershopId)
-      .eq("status", "waiting")
-      .order("joined_at", { ascending: true });
-
-    if (waitingList) {
-      setWaitingCount(waitingList.length);
+      // Chamada limpa baseada apenas no slug (sem o barbershopId)
+      const res = await fetch(`/api/public/queue/status?slug=${currentSlug}`);
       
-      const activeQueueId = forcedQueueId !== undefined ? forcedQueueId : queueIdRef.current;
-      const currentUser = userRef.current;
+      // Se não encontrou a rota (404), saímos silenciosamente para não estourar a tela.
+      if (!res.ok) return;
+      
+      const data = await res.json();
+      
+      setWaitingCount(data.waitingCount || 0);
+      setUserPosition(data.myPosition || null);
 
-      if (currentUser) {
-        const idx = waitingList.findIndex(x => x.client_auth_id === currentUser.id);
-        setUserPosition(idx !== -1 ? idx + 1 : null);
-      } else if (activeQueueId) {
-        const idx = waitingList.findIndex(x => x.id === activeQueueId);
-        setUserPosition(idx !== -1 ? idx + 1 : null);
+      const ticket = data.ticket || data.queueData; 
+      
+      if (ticket) {
+        const isTerminal = isTerminalStatus(ticket.status);
+
+        if (isTerminal && ticket.is_rated) {
+          if (queueIdRef.current !== ticket.id) {
+            handleResetTerminalState();
+            return; 
+          }
+        }
+
+        handleSetQueueId(ticket.id);
+        setCurrentStatus(ticket.status);
+        if (ticket.barber_name) setBarberName(ticket.barber_name);
+        if (ticket.chair_number) setChairNumber(ticket.chair_number);
+        setHasRated(ticket.is_rated);
+        if (ticket.joined_at) setJoinedAt(ticket.joined_at);
+        setInQueue(!isTerminal);
       } else {
-        setUserPosition(null);
+        if (queueIdRef.current) {
+          handleResetTerminalState();
+        }
       }
-    } else {
-      setWaitingCount(0);
-      setUserPosition(null);
+    } catch (error) {
+      console.error("Erro ao sincronizar status seguro:", error);
     }
-  }, [barbershopId, supabase]); 
+  }, [isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
 
-  const syncRef = useRef(syncMyStatus);
+  const syncRef = useRef(fetchQueueStatus);
   useEffect(() => { 
-    syncRef.current = syncMyStatus; 
-  }, [syncMyStatus]);
-  
-  const updateGlobalRef = useRef(updateGlobalCountAndPosition);
-  useEffect(() => { 
-    updateGlobalRef.current = updateGlobalCountAndPosition; 
-  }, [updateGlobalCountAndPosition]);
+    syncRef.current = fetchQueueStatus; 
+  }, [fetchQueueStatus]);
+
+  // =========================================================================
+  // O RADAR SILENCIOSO (Polling seguro acionado mesmo sem Realtime)
+  // =========================================================================
+  useEffect(() => {
+    // 8 segundos se estiver na fila, 15 segundos se estiver apenas olhando o tamanho da fila
+    const interval = setInterval(() => {
+      if (syncRef.current) syncRef.current();
+    }, inQueue ? 8000 : 15000); 
+    
+    return () => clearInterval(interval);
+  }, [inQueue]);
+
+  // =========================================================================
+  // REALTIME SEGURO (Apenas atua como Gatilho para buscar na API Segura)
+  // =========================================================================
+  useEffect(() => {
+    // Escuta mudanças. Se o RLS bloquear para 'anon', não tem problema: o setInterval() acima cobre a lacuna.
+    const channel = supabase
+      .channel(`public-queue-${barbershopId}`)
+      .on(
+        "postgres_changes", 
+        { event: "*", schema: "public", table: "virtual_queue", filter: `barbershop_id=eq.${barbershopId}` }, 
+        () => {
+           if (syncRef.current) syncRef.current();
+        }
+      )
+      .subscribe();
+
+    if (syncRef.current) syncRef.current();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [barbershopId, supabase]);
+
+  useEffect(() => {
+    const handleVisibilityAndFocus = () => {
+      if (document.visibilityState === 'visible') {
+        if (syncRef.current) syncRef.current();
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibilityAndFocus);
+    window.addEventListener('focus', handleVisibilityAndFocus);
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityAndFocus);
+      window.removeEventListener('focus', handleVisibilityAndFocus);
+    };
+  }, []);
 
   // =========================================================================
   // RECUPERAÇÃO DE SESSÃO AVULSA
@@ -392,62 +380,6 @@ export default function QueueForm({
       }
     }
   }, [user, initialQueueData, handleSetQueueId]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel(`public-queue-${barbershopId}`)
-      .on(
-        "postgres_changes", 
-        { event: "*", schema: "public", table: "virtual_queue" }, 
-        (payload) => {
-          
-          if (payload.new && (payload.new as QueueRowPayload).id === queueIdRef.current) {
-             const data = payload.new as QueueRowPayload;
-             const isTerminal = isTerminalStatus(data.status);
-
-             if (isTerminal && data.is_rated) {
-                if (queueIdRef.current !== data.id) {
-                  handleResetTerminalState();
-                  return;
-                }
-             }
-
-             handleSetQueueId(data.id);
-             setCurrentStatus(data.status);
-             if (data.barber_name) setBarberName(data.barber_name);
-             if (data.chair_number) setChairNumber(data.chair_number);
-             setHasRated(data.is_rated);
-             if (data.joined_at) setJoinedAt(data.joined_at);
-             setInQueue(!isTerminal);
-          } else {
-             if (syncRef.current) syncRef.current();
-          }
-
-          if (updateGlobalRef.current) updateGlobalRef.current();
-        }
-      )
-      .subscribe();
-
-    if (syncRef.current) syncRef.current();
-    if (updateGlobalRef.current) updateGlobalRef.current();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [barbershopId, supabase, isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
-
-  useEffect(() => {
-    const handleVisibilityAndFocus = () => {
-      if (document.visibilityState === 'visible') {
-        if (syncRef.current) syncRef.current();
-        if (updateGlobalRef.current) updateGlobalRef.current();
-      }
-    };
-    window.addEventListener('visibilitychange', handleVisibilityAndFocus);
-    window.addEventListener('focus', handleVisibilityAndFocus);
-    return () => {
-      window.removeEventListener('visibilitychange', handleVisibilityAndFocus);
-      window.removeEventListener('focus', handleVisibilityAndFocus);
-    };
-  }, []);
 
   // =========================================================================
   // HANDLERS DE AUTENTICAÇÃO (Seguros via Turnstile)
@@ -518,6 +450,9 @@ export default function QueueForm({
     window.location.assign(window.location.pathname); 
   };
 
+  // =========================================================================
+  // HANDLERS SEGUROS (Consumindo nova API Server-side)
+  // =========================================================================
   const handleJoinQueue = async () => {
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (!turnstileToken && !isLocalhost) { 
@@ -528,43 +463,30 @@ export default function QueueForm({
     setLoading(true);
     try {
       const finalBarberId = selectedBarberId === "next" ? null : selectedBarberId;
-      const res = await fetch('/api/join-queue', {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
+      
+      const res = await fetch('/api/public/queue/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          barbershopId: barbershopId, 
+          slug: currentSlug,
           clientName: userName,
           barberId: finalBarberId,
           turnstileToken: turnstileToken || "bypass_for_localhost" 
         })
       });
 
-      const textResponse = await res.text();
-      let result;
-      try {
-        result = JSON.parse(textResponse);
-      } catch (e) {
-        toast.error("Erro interno (500). Verifique o terminal do VS Code.");
-        setLoading(false);
-        return;
-      }
+      const result = await res.json();
       
-      if (result.error) {
-        toast.error(result.error);
+      if (!res.ok || result.error) {
+        toast.error(result.error || "Erro ao entrar na fila.");
         turnstileRef.current?.reset();
         setTurnstileToken(null);
       } else {
-        const newQueueId = result.queueId || result.id || (result.data && result.data.id);
-        if (!newQueueId) {
-           toast.error("Erro no sistema: A API não devolveu o ID da fila.");
-           setLoading(false);
-           return;
-        }
-
-        handleSetQueueId(newQueueId);
+        toast.success("Você entrou na fila!");
         setInQueue(true);
         setCurrentStatus("waiting");
-        if (updateGlobalRef.current) updateGlobalRef.current(newQueueId);
+        if (syncRef.current) syncRef.current();
       }
       setLoading(false);
     } catch (error) {
@@ -584,11 +506,13 @@ export default function QueueForm({
     
     try {
       const finalBarberId = selectedBarberId === "next" ? null : selectedBarberId;
-      const res = await fetch('/api/join-queue', {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
+
+      const res = await fetch('/api/public/queue/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          barbershopId: barbershopId, 
+          slug: currentSlug,
           clientName: data.clientName,
           phone: data.phone,
           email: data.email,
@@ -597,38 +521,19 @@ export default function QueueForm({
         })
       });
 
-      const textResponse = await res.text();
-      let result;
-      try {
-        result = JSON.parse(textResponse);
-      } catch (e) {
-        toast.error("Erro interno (500). Verifique o terminal do VS Code.");
-        return;
-      }
+      const result = await res.json();
       
-      if (result.error) {
-        toast.error(result.error);
+      if (!res.ok || result.error) {
+        toast.error(result.error || "Erro ao adicionar cliente.");
         turnstileRef.current?.reset();
         setTurnstileToken(null);
       } else {
-        const newQueueId = result.queueId || result.id || (result.data && result.data.id);
-        
-        if (!newQueueId) {
-           toast.error("Erro no sistema: A API não devolveu o ID da fila.");
-           return;
-        }
-
         toast.success("Cliente adicionado à fila!");
-        handleSetQueueId(newQueueId);
         setWalkInName(data.clientName);
         setInQueue(true);
         setCurrentStatus("waiting");
         
-        if (typeof document !== "undefined") {
-          document.cookie = `walkInQueueId=${newQueueId}; path=/; max-age=86400; SameSite=Lax`;
-        }
-
-        if (updateGlobalRef.current) updateGlobalRef.current(newQueueId);
+        if (syncRef.current) syncRef.current();
       }
     } catch (error) {
       toast.error("Erro de conexão. Tente novamente.");
@@ -638,28 +543,101 @@ export default function QueueForm({
   };
 
   const handleLeaveQueue = async () => {
-    if (!queueIdRef.current) return;
     try {
-      await fetch('/api/leave-queue', {
+      const res = await fetch('/api/public/queue/cancel', {
         method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ queueId: queueIdRef.current, barbershopId })
+        headers: { 'Content-Type': 'application/json' }
       });
-      toast.success("Cancelado com sucesso.");
       
-      setInQueue(false);
-      handleSetQueueId(null);
-      setWalkInName(null);
-      setCurrentStatus(null);
-      resetWalkInForm();
-      turnstileRef.current?.reset();
-      setTurnstileToken(null);
-      if (typeof document !== "undefined") {
-        document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-      }
-      if (updateGlobalRef.current) updateGlobalRef.current(null);
+      if (!res.ok) throw new Error("Erro ao cancelar");
+
+      toast.success("Cancelado com sucesso.");
+      handleResetWalkInView();
+      if (syncRef.current) syncRef.current();
     } catch (error) { 
       toast.error("Erro ao cancelar a fila."); 
+    }
+  };
+
+  const handleVerifyPin = async () => {
+    if (!manualPin || manualPin.length < 4) return;
+    setVerifyingPin(true);
+    try {
+      const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
+      const res = await fetch('/api/public/verify-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          slug: currentSlug, 
+          providedPin: manualPin,
+          pin: manualPin
+        })
+      });
+      const result = await res.json();
+      
+      if (res.ok && result.success) {
+        window.location.assign(`${window.location.pathname}?origem=balcao`);
+      } else {
+        toast.error(result.error || "Código inválido.");
+        setVerifyingPin(false);
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+      setVerifyingPin(false);
+    }
+  };
+
+  const handleSubmitReview = async () => {
+    if (barberRating === 0 || barbershopRating === 0) return;
+    setIsSubmittingReview(true);
+    try {
+      const res = await fetch('/api/public/queue/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          barberName, 
+          barberRating, 
+          barbershopRating, 
+          comment: reviewComment,
+          skipped: false 
+        })
+      });
+      const result = await res.json();
+      
+      if (res.ok && result.success) {
+        toast.success("Obrigado pela sua avaliação!");
+        setHasRated(true); 
+      } else {
+        toast.error(result.error || "Erro ao enviar avaliação.");
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  const handleSkipReview = async () => {
+    setIsSubmittingReview(true);
+    try {
+      const res = await fetch('/api/public/queue/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          skipped: true
+        })
+      });
+      
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setHasRated(true); 
+      } else {
+        toast.error(result.error || "Erro ao pular avaliação.");
+      }
+    } catch (error) {
+      toast.error("Erro de conexão. Tente novamente.");
+    } finally {
+      setIsSubmittingReview(false);
     }
   };
 
@@ -674,89 +652,6 @@ export default function QueueForm({
         toast.error("QR Code inválido."); 
         setIsScanning(false); 
       }
-    }
-  };
-
-  const handleVerifyPin = async () => {
-    if (!manualPin || manualPin.length < 4) return;
-    setVerifyingPin(true);
-    try {
-      const res = await fetch('/api/verify-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barbershopId, providedPin: manualPin })
-      });
-      const result = await res.json();
-      if (result.success) {
-        window.location.assign(`${window.location.pathname}?origem=balcao`);
-      } else {
-        toast.error(result.error);
-        setVerifyingPin(false);
-      }
-    } catch (error) {
-      toast.error("Erro de conexão. Tente novamente.");
-      setVerifyingPin(false);
-    }
-  };
-
-  const handleSubmitReview = async () => {
-    const activeId = queueIdRef.current;
-    if (!activeId || barberRating === 0 || barbershopRating === 0) return;
-    setIsSubmittingReview(true);
-    try {
-      const res = await fetch('/api/submit-review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          queueId: activeId, 
-          barbershopId, 
-          barberName, 
-          barberRating, 
-          barbershopRating, 
-          comment: reviewComment,
-          skipped: false 
-        })
-      });
-      const result = await res.json();
-      if (result.success) {
-        toast.success("Obrigado pela sua avaliação!");
-        setHasRated(true); 
-      } else {
-        toast.error(result.error || "Erro ao enviar avaliação.");
-      }
-    } catch (error) {
-      toast.error("Erro de conexão. Tente novamente.");
-    } finally {
-      setIsSubmittingReview(false);
-    }
-  };
-
-  const handleSkipReview = async () => {
-    const activeId = queueIdRef.current;
-    if (!activeId) return;
-    
-    setIsSubmittingReview(true);
-    try {
-      const res = await fetch('/api/submit-review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          queueId: activeId, 
-          barbershopId, 
-          skipped: true
-        })
-      });
-      
-      const result = await res.json();
-      if (result.success) {
-        setHasRated(true); 
-      } else {
-        toast.error(result.error || "Erro ao pular avaliação.");
-      }
-    } catch (error) {
-      toast.error("Erro de conexão. Tente novamente.");
-    } finally {
-      setIsSubmittingReview(false);
     }
   };
 
@@ -870,19 +765,19 @@ export default function QueueForm({
                     <h4 className="font-bold text-blue-900">Acompanhamento Remoto</h4>
                     <p className="text-xs text-blue-700/80 font-medium leading-relaxed">Para entrar na fila de atendimento, dirija-se até a recepção da barbearia.</p>
                   </div>
-                  <Button onClick={() => setIsScanning(true)} className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-lg">
+                  <Button type="button" onClick={() => setIsScanning(true)} className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-lg">
                     <Camera className="mr-2" size={20} /> Ler QR Code da Recepção
                   </Button>
-                  <button onClick={() => setShowManualPin(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-4 pt-2 pb-2 transition-colors">
+                  <button type="button" onClick={() => setShowManualPin(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-4 pt-2 pb-2 transition-colors">
                     Câmera não funciona? Digitar código
                   </button>
                   
                   {user ? (
-                    <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 border-t border-slate-100 mt-2">
+                    <button type="button" onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 border-t border-slate-100 mt-2">
                       <LogOut size={14} /> Sair da conta
                     </button>
                   ) : (
-                    <button onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 border-t border-slate-100 mt-2">
+                    <button type="button" onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 border-t border-slate-100 mt-2">
                       <UserIcon size={14} /> Fazer Login Antecipado
                     </button>
                   )}
@@ -894,7 +789,7 @@ export default function QueueForm({
                   <div className="w-full max-w-70 rounded-2xl overflow-hidden shadow-lg border-4 border-slate-800">
                     <Scanner onScan={handleScanSuccess} onError={(err: unknown) => console.log(err)} />
                   </div>
-                  <Button onClick={() => setIsScanning(false)} variant="ghost" className="text-slate-500 w-full">Cancelar leitura</Button>
+                  <Button type="button" onClick={() => setIsScanning(false)} variant="ghost" className="text-slate-500 w-full">Cancelar leitura</Button>
                 </div>
               )}
 
@@ -903,11 +798,11 @@ export default function QueueForm({
                   <div className="w-full space-y-3 bg-white p-4 rounded-2xl border border-slate-200">
                     <label className="text-sm font-bold text-slate-700 block text-center">Digite o Código de Check-in</label>
                     <input type="text" maxLength={6} value={manualPin} onChange={(e) => setManualPin(e.target.value)} placeholder="Ex: 7392" className="w-full h-14 bg-slate-50 border-2 border-slate-200 rounded-xl text-center text-2xl font-black tracking-widest text-slate-800 focus:border-blue-500 outline-none transition-all" />
-                    <Button onClick={handleVerifyPin} disabled={verifyingPin} className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl">
+                    <Button type="button" onClick={handleVerifyPin} disabled={verifyingPin} className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl">
                       {verifyingPin ? <Loader2 className="animate-spin size-5" /> : "Validar Código"}
                     </Button>
                   </div>
-                  <Button onClick={() => setShowManualPin(false)} variant="ghost" className="text-slate-500 w-full">Voltar para QR Code</Button>
+                  <Button type="button" onClick={() => setShowManualPin(false)} variant="ghost" className="text-slate-500 w-full">Voltar para QR Code</Button>
                 </div>
               )}
             </>
@@ -919,10 +814,10 @@ export default function QueueForm({
                   {renderBarberSelection()}
                   {renderTurnstile()}
                   <div className="space-y-4">
-                    <Button onClick={handleJoinQueue} disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} className="w-full h-16 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98]">
+                    <Button type="button" onClick={handleJoinQueue} disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} className="w-full h-16 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98]">
                       {loading ? <Loader2 className="animate-spin size-6" /> : <div className="flex items-center gap-2"><Sparkles className="size-5" /><span>Entrar na Fila</span></div>}
                     </Button>
-                    <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2"><LogOut size={14} />Não é você? Trocar de conta</button>
+                    <button type="button" onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2"><LogOut size={14} />Não é você? Trocar de conta</button>
                   </div>
                 </div>
               ) : (
@@ -939,6 +834,7 @@ export default function QueueForm({
                   <TabsContent value="login" className="space-y-6 animate-in fade-in">
                     <div className="space-y-3">
                       <Button 
+                        type="button"
                         onClick={handleGoogleLogin} 
                         disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} 
                         variant="outline" 
@@ -1113,6 +1009,7 @@ export default function QueueForm({
               <div className="w-full space-y-3 pt-2">
                 {renderTurnstile()}
                 <Button 
+                  type="button"
                   onClick={handleGoogleLogin} 
                   disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')}
                   className="w-full h-14 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-black rounded-2xl shadow-lg shadow-slate-200/50 transition-all active:scale-[0.98]"
@@ -1125,6 +1022,7 @@ export default function QueueForm({
                   )}
                 </Button>
                 <button 
+                  type="button"
                   onClick={handleResetWalkInView} 
                   className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-2 transition-colors"
                 >
@@ -1173,6 +1071,7 @@ export default function QueueForm({
     
                   <div className="w-full space-y-3 pt-2">
                     <Button 
+                      type="button"
                       onClick={handleSubmitReview} 
                       disabled={barberRating === 0 || barbershopRating === 0 || isSubmittingReview} 
                       className="w-full h-14 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl shadow-lg shadow-amber-200 transition-all active:scale-[0.98]"
@@ -1180,6 +1079,7 @@ export default function QueueForm({
                       {isSubmittingReview ? <Loader2 className="animate-spin" /> : "Enviar Avaliação"}
                     </Button>
                     <button 
+                      type="button"
                       onClick={handleSkipReview} 
                       disabled={isSubmittingReview}
                       className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-2 disabled:opacity-50"
@@ -1209,6 +1109,7 @@ export default function QueueForm({
                        </p>
                      )}
                      <Button 
+                       type="button"
                        onClick={user ? handleResetTerminalState : handleResetWalkInView} 
                        className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
                      >
@@ -1218,7 +1119,7 @@ export default function QueueForm({
                 </div>
               )}
               
-              <button onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
+              <button type="button" onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
                 <LogOut size={14} /> Sair da conta
               </button>
             </>
@@ -1265,12 +1166,12 @@ export default function QueueForm({
               )}
 
               <div className="w-full pt-4 space-y-3">
-                 <Button onClick={handleLeaveQueue} variant="outline" className="w-full h-12 border-red-100 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 font-semibold rounded-xl transition-all">
+                 <Button type="button" onClick={handleLeaveQueue} variant="outline" className="w-full h-12 border-red-100 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 font-semibold rounded-xl transition-all">
                    <XCircle className="size-4 mr-2" /> Cancelar / Sair da Fila
                  </Button>
 
                  {!user && (
-                    <Button onClick={handleResetWalkInView} variant="ghost" className="w-full h-12 text-slate-500 hover:text-slate-700 hover:bg-slate-100 font-semibold rounded-xl transition-all">
+                    <Button type="button" onClick={handleResetWalkInView} variant="ghost" className="w-full h-12 text-slate-500 hover:text-slate-700 hover:bg-slate-100 font-semibold rounded-xl transition-all">
                       <LogOut className="size-4 mr-2" /> Deixar o celular para outra pessoa
                     </Button>
                  )}
@@ -1279,7 +1180,7 @@ export default function QueueForm({
           )}
           
           {user && (
-            <button onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
+            <button type="button" onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
               <LogOut size={14} /> Sair da conta Google
             </button>
           )}

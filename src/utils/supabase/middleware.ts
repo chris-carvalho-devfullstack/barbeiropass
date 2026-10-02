@@ -41,6 +41,7 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith('/cadastro') || 
     pathname.startsWith('/callback') || 
     pathname.startsWith('/b/') || // <-- ROTA DA FILA PÚBLICA LIBERADA AQUI
+    pathname.startsWith('/api/public/') ||
     pathname === '/'
 
   // Se o usuário não estiver logado e tentar acessar uma rota protegida

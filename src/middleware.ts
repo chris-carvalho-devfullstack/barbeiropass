@@ -18,6 +18,6 @@ export const config = {
      * 5. /api/submit-review -> API para o cliente avaliar o atendimento
      * 6. Rotas de autenticação (/login, /cadastro, /auth)
      */
-    '/((?!_next/static|_next/image|favicon.ico|b/|api/join-queue|api/verify-pin|api/submit-review|login|cadastro|auth/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|b/|api/join-queue|api/public/|api/verify-pin|api/submit-review|login|cadastro|auth/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
