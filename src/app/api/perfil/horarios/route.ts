@@ -36,7 +36,7 @@ export async function GET() {
       .single();
 
     // Se for null, assumimos falso por segurança
-    const acceptsWalkIn = settings?.accepts_walk_in ?? false; 
+    const acceptsWalkIn = settings?.accepts_walk_in ?? true; 
 
     const { data: horarios, error: horariosError } = await supabase
       .from("staff_working_hours")

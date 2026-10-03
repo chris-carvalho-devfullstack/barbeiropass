@@ -173,11 +173,43 @@ export async function registerBarbershop(formData: RegisterBarbershopData) {
   }
 
   // ============================================================================
+  // NOVO: INICIALIZAÇÃO DAS CONFIGURAÇÕES DA BARBEARIA
+  // A Fila Virtual nasce ATIVADA por padrão.
+  // ============================================================================
+  const supabaseAdmin = createAdminClient();
+
+  const { error: settingsError } = await supabaseAdmin
+    .from("barbershop_settings")
+    .insert({
+      barbershop_id: barbershopData.id,
+      accepts_walk_in: true,
+    });
+
+  if (settingsError) {
+    console.error(
+      "[SECURITY LOG] Erro ao inicializar configurações da barbearia:",
+      settingsError
+    );
+
+    // SISTEMA DE ROLLBACK
+    // Se a configuração inicial não puder ser criada,
+    // removemos a barbearia recém-criada.
+    await supabaseAdmin
+      .from("barbershops")
+      .delete()
+      .eq("id", barbershopData.id);
+
+    return {
+      error:
+        "Erro interno ao inicializar as configurações da barbearia. Tente novamente.",
+    };
+  }
+
+  // ============================================================================
   // ETAPA 6: INSERÇÃO DE PERMISSÃO - ELEVAÇÃO DE PRIVILÉGIO (ZERO TRUST)
   // Como fechamos o RLS da tabela barbershop_members, o usuário não pode
   // vincular a si mesmo. Usamos o cliente Admin rodando isolado no servidor.
   // ============================================================================
-  const supabaseAdmin = createAdminClient();
 
   const { error: memberError } = await supabaseAdmin.from("barbershop_members").insert({
     barbershop_id: barbershopData.id,

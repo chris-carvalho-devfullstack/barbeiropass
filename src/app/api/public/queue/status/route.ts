@@ -81,6 +81,7 @@ export async function GET(request: Request) {
         ticket: ticket ? {
           id: ticket.id,
           status: ticket.status,
+          client_auth_id: ticket.client_auth_id,
           barber_name: ticket.barber_name,
           chair_number: ticket.chair_number,
           is_rated: ticket.is_rated,

@@ -19,6 +19,7 @@ interface PageProps {
 type InitialQueueData = {
   id: string;
   status: string;
+  client_auth_id: string | null;
   barber_name: string | null;
   chair_number: string | null;
   is_rated: boolean;
@@ -98,7 +99,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       // Se tiver conta, a busca normal funciona pois o usuário é dono do ticket
       const { data: userData } = await supabase
         .from("virtual_queue")
-        .select("id, status, barber_name, chair_number, is_rated, joined_at")
+        .select("id, status, client_auth_id, barber_name, chair_number, is_rated, joined_at")
         .eq("barbershop_id", barbershop.id)
         .eq("client_auth_id", user.id)
         .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
@@ -110,7 +111,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
       // Se for AVULSO, usamos a chave Admin para ler o ticket mesmo que o RLS tente esconder!
       const { data: anonData } = await supabaseAdmin
         .from("virtual_queue")
-        .select("id, status, barber_name, chair_number, is_rated, joined_at")
+        .select("id, status, client_auth_id, barber_name, chair_number, is_rated, joined_at")
         .eq("barbershop_id", barbershop.id)
         .eq("id", walkInQueueId)
         .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
@@ -141,6 +142,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
         initialQueueData = {
           id: data.id,
           status: data.status,
+          client_auth_id: data.client_auth_id,
           barber_name: data.barber_name,
           chair_number: data.chair_number,
           is_rated: isActuallyRated, 

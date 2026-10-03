@@ -56,6 +56,7 @@ interface QueueFormProps {
   initialQueueData: { 
     id: string; 
     status: string; 
+    client_auth_id: string | null;
     barber_name: string | null; 
     chair_number: string | null; 
     is_rated: boolean; 
@@ -121,6 +122,10 @@ export default function QueueForm({
   const [queueId, setQueueId] = useState<string | null>(initialQueueData?.id || null);
   const queueIdRef = useRef<string | null>(queueId);
   const userRef = useRef<User | null>(user);
+
+  const [ticketClientAuthId, setTicketClientAuthId] = useState<string | null>(
+    initialQueueData?.client_auth_id || null
+  );
   
   const [walkInName, setWalkInName] = useState<string | null>(null);
 
@@ -157,6 +162,7 @@ export default function QueueForm({
   
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
   const estimatedWaitTime = waitingCount * 20;
+  const ticketHasLinkedAccount = Boolean(ticketClientAuthId);
 
   const {
     register,
@@ -221,6 +227,7 @@ export default function QueueForm({
        const isTerminal = isTerminalStatus(initialQueueData.status);
        if (initialQueueData.id === queueIdRef.current || !queueIdRef.current) {
           setCurrentStatus(initialQueueData.status);
+          setTicketClientAuthId(initialQueueData.client_auth_id);
           if (initialQueueData.barber_name) setBarberName(initialQueueData.barber_name);
           if (initialQueueData.chair_number) setChairNumber(initialQueueData.chair_number);
           setHasRated(initialQueueData.is_rated);
@@ -292,6 +299,7 @@ export default function QueueForm({
         }
 
         handleSetQueueId(ticket.id);
+        setTicketClientAuthId(ticket.client_auth_id ?? null);
         setCurrentStatus(ticket.status);
         if (ticket.barber_name) setBarberName(ticket.barber_name);
         if (ticket.chair_number) setChairNumber(ticket.chair_number);
@@ -544,18 +552,61 @@ export default function QueueForm({
 
   const handleLeaveQueue = async () => {
     try {
+      const currentSlug =
+        typeof window !== 'undefined'
+          ? window.location.pathname.split('/').filter(Boolean).pop() || ''
+          : '';
+
       const res = await fetch('/api/public/queue/cancel', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: currentSlug }),
       });
-      
-      if (!res.ok) throw new Error("Erro ao cancelar");
+
+      if (!res.ok) {
+        throw new Error("Erro ao cancelar");
+      }
 
       toast.success("Cancelado com sucesso.");
       handleResetWalkInView();
-      if (syncRef.current) syncRef.current();
-    } catch (error) { 
-      toast.error("Erro ao cancelar a fila."); 
+
+      if (syncRef.current) {
+        syncRef.current();
+      }
+    } catch (error) {
+      toast.error("Erro ao cancelar a fila.");
+    }
+  };
+
+  const handleDismissCompletedTicket = async () => {
+    try {
+      const currentSlug =
+        typeof window !== "undefined"
+          ? window.location.pathname.split("/").filter(Boolean).pop() || ""
+          : "";
+
+      const res = await fetch("/api/public/queue/dismiss", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          slug: currentSlug,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Erro ao dispensar atendimento");
+      }
+
+      handleResetWalkInView();
+
+      if (syncRef.current) {
+        syncRef.current();
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível voltar para a tela inicial.");
     }
   };
 
@@ -747,13 +798,13 @@ export default function QueueForm({
       )}
 
       {!isScanning && !showManualPin && !isTerminalStatus(currentStatus) && (
-         <p className="text-sm font-medium text-slate-600 text-center">
-           {user ? (
-             <>Olá, <span className="font-bold text-slate-900">{userName}</span>!</>
-           ) : walkInName && inQueue ? (
-             <>Ficha de <span className="font-bold text-slate-900">{walkInName}</span></>
-           ) : null}
-         </p>
+        <p className="text-sm font-medium text-slate-600 text-center">
+          {user ? (
+            <>Olá, <span className="font-bold text-slate-900">{userName}</span>!</>
+          ) : walkInName && inQueue ? (
+            <>Ficha de <span className="font-bold text-slate-900">{walkInName}</span></>
+          ) : null}
+        </p>
       )}
 
       {/* ========================================================= */}
@@ -980,7 +1031,7 @@ export default function QueueForm({
         <div className="w-full animate-in zoom-in duration-300">
           
           {/* SE NÃO TEM CONTA: MOSTRA A TELA DE CONVERSÃO */}
-          {!user ? (
+          {!ticketHasLinkedAccount ? (
             <div className="bg-white border-2 border-blue-100 rounded-[2rem] p-6 shadow-xl shadow-blue-100/50 flex flex-col items-center space-y-6">
               <div className="h-16 w-16 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg shadow-blue-200">
                 <Sparkles size={32} />
@@ -1029,7 +1080,7 @@ export default function QueueForm({
                 </Button>
                 <button 
                   type="button"
-                  onClick={handleResetWalkInView} 
+                  onClick={handleDismissCompletedTicket} 
                   className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-2 transition-colors"
                 >
                   Agora não, só quero sair
@@ -1062,7 +1113,7 @@ export default function QueueForm({
                       <p className="text-sm font-bold text-slate-700 mb-2">O ambiente ({barbershopName})</p>
                       <div className="flex gap-1">
                         {[1, 2, 3, 4, 5].map((star) => (
-                          <button key={`shop-${star}`} type="button" onClick={() => setBarbershopRating(star)} onMouseEnter={() => setHoverBarbershopRating(star)} onMouseLeave={() => setHoverBarbershopRating(0)} className="p-1 transition-transform hover:scale-110 focus:outline-none">
+                          <button key={`shop-${star}`} type="button" onClick={() => setBarbershopRating(star)} onMouseEnter={() => setHoverBarbershopRating(star)} onMouseLeave={() => setHoverBarberRating(0)} className="p-1 transition-transform hover:scale-110 focus:outline-none">
                             <Star size={32} className={`transition-colors duration-200 ${(hoverBarbershopRating || barbershopRating) >= star ? "fill-blue-500 text-blue-500" : "text-slate-200"}`} />
                           </button>
                         ))}
@@ -1175,12 +1226,6 @@ export default function QueueForm({
                  <Button type="button" onClick={handleLeaveQueue} variant="outline" className="w-full h-12 border-red-100 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 font-semibold rounded-xl transition-all">
                    <XCircle className="size-4 mr-2" /> Cancelar / Sair da Fila
                  </Button>
-
-                 {!user && (
-                    <Button type="button" onClick={handleResetWalkInView} variant="ghost" className="w-full h-12 text-slate-500 hover:text-slate-700 hover:bg-slate-100 font-semibold rounded-xl transition-all">
-                      <LogOut className="size-4 mr-2" /> Deixar o celular para outra pessoa
-                    </Button>
-                 )}
               </div>
             </div>
           )}

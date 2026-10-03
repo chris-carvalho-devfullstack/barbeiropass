@@ -53,6 +53,7 @@ const settingsSchema = z.object({
     coffee: z.boolean(),
     kidsArea: z.boolean(),
   }),
+  accepts_walk_in: z.boolean(),
 });
 
 const profileUpdateSchema = z.object({
@@ -404,7 +405,7 @@ export async function updateAppearance(formData: AppearanceFormData) {
  */
 export async function updateBarbershopSettings(settings: BarbershopSettingsData) {
   const parsed = settingsSchema.safeParse(settings);
-  if (!parsed.success) return { error: "Configurações inválidas enviadas ao servidor." };
+  if (!parsed.success) return { error: "Configurações inválidas enviadas pelo servidor." };
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -420,6 +421,7 @@ export async function updateBarbershopSettings(settings: BarbershopSettingsData)
       styles: parsed.data.styles,
       target_audience: parsed.data.target_audience,
       amenities: parsed.data.amenities,
+      accepts_walk_in: parsed.data.accepts_walk_in,
     }, { onConflict: 'barbershop_id' });
 
   if (error) return { error: "Erro interno ao atualizar configurações do estabelecimento." };
@@ -428,6 +430,7 @@ export async function updateBarbershopSettings(settings: BarbershopSettingsData)
   
   revalidatePath("/dashboard");
   revalidatePath("/perfil/aparencia");
+  revalidatePath("/perfil/horarios");
   return { success: true };
 }
 

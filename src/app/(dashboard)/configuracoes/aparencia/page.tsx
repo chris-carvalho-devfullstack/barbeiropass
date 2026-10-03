@@ -35,7 +35,7 @@ const InstagramIcon = ({ size = 24, ...props }: InstagramIconProps) => (
     {...props}
   >
     <rect width="20" height="20" x="2" y="2" rx="5" ry="5" />
-    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37" />
     <line x1="17.5" x2="17.51" y1="6.5" y2="6.5" />
   </svg>
 );
@@ -64,6 +64,7 @@ interface BarbershopData {
 
 interface BarbershopSettingsResponse {
   amenities: AmenitiesTypes | null;
+  accepts_walk_in: boolean | null;
 }
 
 interface BarbershopWithSettings extends BarbershopData {
@@ -85,6 +86,8 @@ export default function AparenciaPage() {
     accessibility: false, beer: false, videogame: false,
     coffee: false, kidsArea: false
   });
+
+  const [acceptsWalkIn, setAcceptsWalkIn] = useState(true);
 
   useEffect(() => {
     async function loadData() {
@@ -117,6 +120,8 @@ export default function AparenciaPage() {
         if (settings?.amenities) {
           setAmenities(settings.amenities);
         }
+
+        setAcceptsWalkIn(settings?.accepts_walk_in ?? true);
       }
     }
     loadData();
@@ -189,6 +194,7 @@ export default function AparenciaPage() {
       styles: ["Moderna", "Urbana"], 
       target_audience: ["Masculino"],
       amenities: amenities,
+      accepts_walk_in: acceptsWalkIn,
     };
 
     const [res1, res2] = await Promise.all([
@@ -231,7 +237,7 @@ export default function AparenciaPage() {
               </div>
             )}
             
-            <label className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+            <label className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300">
               <div className="flex flex-col items-center text-white text-sm font-semibold">
                 <Camera size={24} />
                 <span className="mt-2">Alterar Banner</span>
@@ -308,6 +314,51 @@ export default function AparenciaPage() {
                     </Label>
                     <Input id="instagram" name="instagram" defaultValue={barbershop.instagram || ""} placeholder="@seuusuario" className="focus:ring-zinc-900" />
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-zinc-200/60 shadow-sm">
+              <CardHeader>
+                <CardTitle>Atendimento por Fila Virtual</CardTitle>
+                <CardDescription>
+                  Controle se os clientes podem entrar na fila virtual desta barbearia.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-3">
+                      <Label
+                        htmlFor="accepts-walk-in"
+                        className="cursor-pointer text-base font-bold text-zinc-900"
+                      >
+                        Permitir atendimento por Fila Virtual
+                      </Label>
+
+                      <span
+                        className={
+                          acceptsWalkIn
+                            ? "rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-700"
+                            : "rounded-full bg-red-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-red-700"
+                        }
+                      >
+                        {acceptsWalkIn ? "Ativado" : "Bloqueado"}
+                      </span>
+                    </div>
+
+                    <p className="max-w-xl text-sm leading-relaxed text-zinc-500">
+                      Quando desativado, os clientes não poderão entrar na Fila Virtual
+                      desta barbearia. Os atendimentos por agendamento continuam
+                      disponíveis normalmente.
+                    </p>
+                  </div>
+
+                  <Switch
+                    id="accepts-walk-in"
+                    checked={acceptsWalkIn}
+                    onCheckedChange={setAcceptsWalkIn}
+                  />
                 </div>
               </CardContent>
             </Card>

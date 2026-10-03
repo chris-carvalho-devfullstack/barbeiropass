@@ -41,14 +41,56 @@ export async function GET(request: Request) {
               process.env.SUPABASE_SERVICE_ROLE_KEY!
             );
 
-            const { error: updateError } = await supabaseAdmin
+            const { data: queueTicket, error: queueLookupError } = await supabaseAdmin
               .from('virtual_queue')
-              .update({ client_auth_id: user.id })
+              .select('id, client_id, barbershop_id, client_auth_id')
               .eq('id', queueId)
-              .is('client_auth_id', null); // Segurança extra: só vincula se a ficha estiver órfã
+              .maybeSingle();
 
-            if (updateError) {
-              console.error("[PLG CONVERSION ERROR] Falha ao vincular ticket:", updateError);
+            if (queueLookupError) {
+              console.error(
+                "[PLG CONVERSION ERROR] Falha ao localizar ticket:",
+                queueLookupError
+              );
+            } else if (queueTicket) {
+              // Só permite assumir um ticket que ainda não esteja vinculado
+              // a outra conta autenticada.
+              if (!queueTicket.client_auth_id) {
+                // 1. Vincula o cadastro do cliente à conta Google.
+                if (queueTicket.client_id) {
+                  const { error: customerUpdateError } = await supabaseAdmin
+                    .from('clientes')
+                    .update({
+                      auth_user_id: user.id,
+                    })
+                    .eq('id', queueTicket.client_id)
+                    .eq('barbershop_id', queueTicket.barbershop_id)
+                    .is('auth_user_id', null);
+
+                  if (customerUpdateError) {
+                    console.error(
+                      "[PLG CONVERSION ERROR] Falha ao vincular cliente:",
+                      customerUpdateError
+                    );
+                  }
+                }
+
+                // 2. Vincula o ticket à conta autenticada.
+                const { error: updateError } = await supabaseAdmin
+                  .from('virtual_queue')
+                  .update({
+                    client_auth_id: user.id,
+                  })
+                  .eq('id', queueId)
+                  .is('client_auth_id', null);
+
+                if (updateError) {
+                  console.error(
+                    "[PLG CONVERSION ERROR] Falha ao vincular ticket:",
+                    updateError
+                  );
+                }
+              }
             }
           }
 
