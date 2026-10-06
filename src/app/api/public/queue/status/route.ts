@@ -85,7 +85,8 @@ export async function GET(request: Request) {
           barber_name: ticket.barber_name,
           chair_number: ticket.chair_number,
           is_rated: ticket.is_rated,
-          joined_at: ticket.joined_at
+          joined_at: ticket.joined_at,
+          cancellation_type: ticket.cancellation_source
         } : null
       },
       { headers: { "Cache-Control": "private, no-store" } }

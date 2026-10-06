@@ -2,7 +2,11 @@ export const runtime = "edge";
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { EventLogRepository } from "@/infrastructure/database/supabase/EventLogRepository";
+import { EventLogService } from "@/domain/shared/services/EventLogService";
+import { TenantContext } from "@/domain/shared/TenantContext";
 import {
   clearPublicQueueAccessCookie,
   consumePublicRateLimit,
@@ -63,18 +67,52 @@ export async function POST(request: Request) {
       );
     }
 
+    const supabase = await createClient();
+const { data: { user } } = await supabase.auth.getUser();
+
     const { error: updateError } = await admin
       .from("virtual_queue")
-      .update({ status: "cancelled" })
+      .update({
+        status: "cancelled",
+        cancellation_source: "customer"
+      })
       .eq("id", ticket.id)
       .eq("barbershop_id", barbershop.id)
       .eq("status", "waiting");
 
     if (updateError) throw new Error("Não foi possível cancelar o ticket.");
 
+    const context: TenantContext = {
+      tenantId: barbershop.id,
+      userId: user?.id ?? null,
+      role: "public_customer",
+    };
+
+    try {
+      const eventService = new EventLogService(new EventLogRepository(admin));
+
+      await eventService.logEvent(context, {
+        entityType: "QUEUE",
+        entityId: ticket.id,
+        eventType: "QUEUE_LEFT",
+        performedBy: user?.id ?? null,
+        payload: {
+          source: "CUSTOMER",
+          reason: "LEFT_BEFORE_START"
+        },
+      });
+    } catch (eventError) {
+      console.error("[PUBLIC_QUEUE_CANCEL_AUDIT]", eventError);
+      throw eventError;
+    }
+
     await revokePublicQueueToken(admin, token, barbershop.id);
 
-    const response = NextResponse.json({ success: true });
+    const response = NextResponse.json({
+      success: true,
+      cancellationType: "customer"
+    });
+
     return clearPublicQueueAccessCookie(response);
   } catch (error) {
     console.error("[PUBLIC_QUEUE_CANCEL]", error);

@@ -23,6 +23,7 @@ interface QueueItem {
   id: string; 
   client_name: string; 
   client_id: string | null; 
+  client_auth_id: string | null;
   status: "waiting" | "in_progress"; 
   joined_at: string; 
   barber_name: string | null; 
@@ -38,6 +39,16 @@ interface ServiceItem {
 
 interface BarbershopInfo { id: string; slug: string; }
 interface MemberResponse { barbershop_id: string; barbershops: { slug: string; } | null; }
+
+function formatQueueClientName(name: string): string {
+  const parts = name.trim().split(/\s+/);
+
+  if (parts.length <= 1) {
+    return parts[0] || "Cliente";
+  }
+
+  return `${parts[0]} ${parts.at(-1)}`;
+}
 
 export default function FilaDashboard() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -66,7 +77,7 @@ export default function FilaDashboard() {
     try {
       const { data, error } = await supabase
         .from("virtual_queue")
-        .select("id, client_name, client_id, status, joined_at, barber_name, barber_id, staff(full_name)")
+        .select("id, client_name, client_id, client_auth_id, status, joined_at, barber_name, barber_id, staff(full_name)")
         .eq("barbershop_id", bid)
         .in("status", ["waiting", "in_progress"])
         .order("joined_at", { ascending: true });
@@ -332,8 +343,8 @@ export default function FilaDashboard() {
                 </div>
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2 mb-1">
-                    <p className="font-black text-slate-800 text-xl leading-tight">{item.client_name}</p>
-                    {item.client_id && (
+                    <p className="font-black text-slate-800 text-xl leading-tight">{formatQueueClientName(item.client_name)}</p>
+                    {item.client_auth_id && (
                       <div className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-0.5 rounded-lg border border-blue-100 pointer-events-none">
                         <UserCheck className="size-3" />
                         <span className="text-[10px] font-black uppercase tracking-tight">App</span>
@@ -379,31 +390,37 @@ export default function FilaDashboard() {
               {/* Controles do Barbeiro */}
               <div className="flex gap-2">
                 {item.status === 'waiting' && (
+                  <>
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => handleStatus(item.id, 'in_progress')} 
+                      className="text-blue-600 hover:bg-blue-50 h-12 w-12 p-0 rounded-2xl transition-all"
+                      title="Iniciar Atendimento"
+                    >
+                      <Play className="size-6 fill-current" />
+                    </Button>
+
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => handleStatus(item.id, 'cancelled')} 
+                      className="text-slate-300 hover:text-red-500 hover:bg-red-50 h-12 w-12 p-0 rounded-2xl transition-all"
+                      title="Remover da Fila"
+                    >
+                      <XCircle className="size-6" />
+                    </Button>
+                  </>
+                )}
+
+                {item.status === 'in_progress' && (
                   <Button 
                     variant="ghost" 
-                    onClick={() => handleStatus(item.id, 'in_progress')} 
-                    className="text-blue-600 hover:bg-blue-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                    title="Chamar para Cadeira"
+                    onClick={() => openFinishModal(item.id)}
+                    className="text-emerald-600 hover:bg-emerald-50 h-12 w-12 p-0 rounded-2xl transition-all"
+                    title="Finalizar Atendimento"
                   >
-                    <Play className="size-6 fill-current" />
+                    <CheckCircle2 className="size-6" />
                   </Button>
                 )}
-                <Button 
-                  variant="ghost" 
-                  onClick={() => openFinishModal(item.id)}
-                  className="text-emerald-600 hover:bg-emerald-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                  title="Finalizar Atendimento"
-                >
-                  <CheckCircle2 className="size-6" />
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  onClick={() => handleStatus(item.id, 'cancelled')} 
-                  className="text-slate-300 hover:text-red-500 hover:bg-red-50 h-12 w-12 p-0 rounded-2xl transition-all"
-                  title="Remover da Fila"
-                >
-                  <XCircle className="size-6" />
-                </Button>
               </div>
             </div>
           ))

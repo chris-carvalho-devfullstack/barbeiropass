@@ -126,6 +126,8 @@ export default function QueueForm({
   const [ticketClientAuthId, setTicketClientAuthId] = useState<string | null>(
     initialQueueData?.client_auth_id || null
   );
+
+  const [cancellationType, setCancellationType] = useState<"customer" | "barbershop" | "system" | null>(null);
   
   const [walkInName, setWalkInName] = useState<string | null>(null);
 
@@ -202,6 +204,7 @@ export default function QueueForm({
     setInQueue(false);
     handleSetQueueId(null);
     setCurrentStatus(null);
+    setCancellationType(null);
     setWalkInName(null);
   }, [handleSetQueueId]);
 
@@ -210,6 +213,7 @@ export default function QueueForm({
     handleSetQueueId(null);
     setWalkInName(null);
     setCurrentStatus(null);
+    setCancellationType(null);
     resetWalkInForm();
     turnstileRef.current?.reset();
     setTurnstileToken(null);
@@ -300,6 +304,13 @@ export default function QueueForm({
 
         handleSetQueueId(ticket.id);
         setTicketClientAuthId(ticket.client_auth_id ?? null);
+        setCancellationType(
+          ticket.cancellation_type === "customer" ||
+          ticket.cancellation_type === "barbershop" ||
+          ticket.cancellation_type === "system"
+            ? ticket.cancellation_type
+            : null
+        );
         setCurrentStatus(ticket.status);
         if (ticket.barber_name) setBarberName(ticket.barber_name);
         if (ticket.chair_number) setChairNumber(ticket.chair_number);
@@ -307,18 +318,18 @@ export default function QueueForm({
         if (ticket.joined_at) setJoinedAt(ticket.joined_at);
         setInQueue(!isTerminal);
       } else {
-        if (queueIdRef.current) {
+        if (currentStatus !== "cancelled" && queueIdRef.current) {
           handleResetTerminalState();
         }
       }
     } catch (error) {
       console.error("Erro ao sincronizar status seguro:", error);
     }
-  }, [isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
+  }, [currentStatus, isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
 
   const syncRef = useRef(fetchQueueStatus);
   useEffect(() => { 
-    syncRef.current = fetchQueueStatus; 
+    syncRef.current = fetchQueueStatus;
   }, [fetchQueueStatus]);
 
   // =========================================================================
@@ -494,6 +505,7 @@ export default function QueueForm({
         toast.success("Você entrou na fila!");
         setInQueue(true);
         setCurrentStatus("waiting");
+        setCancellationType(null);
         if (syncRef.current) syncRef.current();
       }
       setLoading(false);
@@ -540,6 +552,7 @@ export default function QueueForm({
         setWalkInName(data.clientName);
         setInQueue(true);
         setCurrentStatus("waiting");
+        setCancellationType(null);
         
         if (syncRef.current) syncRef.current();
       }
@@ -563,18 +576,34 @@ export default function QueueForm({
         body: JSON.stringify({ slug: currentSlug }),
       });
 
+      const result = await res.json().catch(() => null);
+
       if (!res.ok) {
-        throw new Error("Erro ao cancelar");
+        throw new Error(result?.error || "Erro ao cancelar");
       }
 
-      toast.success("Cancelado com sucesso.");
-      handleResetWalkInView();
+      setCurrentStatus("cancelled");
+      setCancellationType(
+        result?.cancellationType === "customer"
+          ? "customer"
+          : null
+      );
+      setInQueue(false);
+      setUserPosition(null);
+      setBarberName(null);
+      setChairNumber(null);
+
+      toast.success("Você saiu da fila.");
 
       if (syncRef.current) {
         syncRef.current();
       }
     } catch (error) {
-      toast.error("Erro ao cancelar a fila.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Erro ao cancelar a fila."
+      );
     }
   };
 
@@ -1025,6 +1054,53 @@ export default function QueueForm({
       )}
 
       {/* ========================================================= */}
+      {/* FEEDBACK DE CANCELAMENTO                                   */}
+      {/* ========================================================= */}
+      {currentStatus === "cancelled" && (
+        <div className="w-full animate-in zoom-in duration-300">
+          <div className="bg-white border-2 border-red-100 rounded-[2rem] p-6 shadow-xl shadow-red-100/50 flex flex-col items-center space-y-6">
+            <div className="h-16 w-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center">
+              <XCircle size={32} />
+            </div>
+
+            <div className="text-center space-y-2">
+              <h3 className="font-black text-slate-900 text-2xl">
+                {cancellationType === "barbershop"
+                  ? "Atendimento removido"
+                  : cancellationType === "customer"
+                    ? "Você saiu da fila"
+                    : "Atendimento encerrado"}
+              </h3>
+
+              <p className="text-sm text-slate-500 font-medium leading-relaxed">
+                {cancellationType === "barbershop"
+                  ? "Seu atendimento foi removido da fila pela barbearia antes do início."
+                  : cancellationType === "customer"
+                    ? "Seu atendimento foi cancelado e você saiu da fila com sucesso."
+                    : "Este atendimento não está mais ativo na fila."}
+              </p>
+            </div>
+
+            <div className="w-full bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <p className="text-xs text-slate-500 font-medium text-center leading-relaxed">
+                Você pode voltar para a tela inicial e entrar novamente na fila quando quiser.
+              </p>
+            </div>
+
+            <div className="w-full">
+              <Button 
+                type="button"
+                onClick={handleDismissCompletedTicket}
+                className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
+              >
+                Voltar para a Tela Inicial
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
       {/* TELAS FINAIS: CONVERSÃO (Avulsos) OU AVALIAÇÃO (Logados)  */}
       {/* ========================================================= */}
       {isTerminalStatus(currentStatus) && currentStatus !== "cancelled" && (
@@ -1213,7 +1289,7 @@ export default function QueueForm({
               ) : (
                  <>
                    <div className="h-16 w-16 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center mb-2 shadow-inner">
-                     <span className="text-3xl font-black">{userPosition || "-"}º</span>
+                     <span className="text-3xl font-black">{userPosition || "-" }º</span>
                    </div>
                    <h3 className="font-black text-slate-900 text-xl">Você está na fila!</h3>
                    <p className="text-sm text-slate-500 text-center font-medium px-4">

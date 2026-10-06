@@ -58,11 +58,6 @@ async function verifyTurnstile(token: string, request: Request): Promise<boolean
   return result.success === true;
 }
 
-function toPublicName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  return parts.length > 1 ? `${parts[0]} ${parts.at(-1)?.[0]}.` : parts[0];
-}
-
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null);
@@ -197,7 +192,7 @@ export async function POST(request: Request) {
       barbershop_id: barbershop.id,
       client_id: customer.id,
       client_auth_id: user?.id ?? null,
-      client_name: toPublicName(customer.name),
+      client_name: customer.name,
       barber_id: barberId ?? null,
       is_authenticated: Boolean(user),
       status: "waiting",

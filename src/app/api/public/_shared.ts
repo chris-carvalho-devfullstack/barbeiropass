@@ -34,6 +34,7 @@ export type PublicQueueTicket = {
   chair_number: string | null;
   is_rated: boolean;
   joined_at: string | null;
+  cancellation_source: "customer" | "barbershop" | "system" | null;
 };
 
 export async function resolvePublicBarbershop(
@@ -47,7 +48,7 @@ export async function resolvePublicBarbershop(
     .maybeSingle();
 
   if (error) {
-    throw new Error("NÃ£o foi possÃ­vel identificar a barbearia.");
+    throw new Error("Não foi possível identificar a barbearia.");
   }
 
   return data;
@@ -70,7 +71,7 @@ export async function consumePublicRateLimit(
   });
 
   if (error) {
-    throw new Error("NÃ£o foi possÃ­vel validar o limite de tentativas.");
+    throw new Error("Não foi possível validar o limite de tentativas.");
   }
 
   return data === true;
@@ -121,7 +122,7 @@ export async function getOwnedPublicQueueTicket(
     .maybeSingle();
 
   if (accessError) {
-    throw new Error("NÃ£o foi possÃ­vel validar o acesso ao ticket.");
+    throw new Error("Não foi possível validar o acesso ao ticket.");
   }
 
   if (!access) return null;
@@ -129,14 +130,14 @@ export async function getOwnedPublicQueueTicket(
   const { data: ticket, error: ticketError } = await admin
     .from("virtual_queue")
     .select(
-      "id, barbershop_id, client_id, client_auth_id, status, barber_name, chair_number, is_rated, joined_at"
+      "id, barbershop_id, client_id, client_auth_id, status, barber_name, chair_number, is_rated, joined_at, cancellation_source"
     )
     .eq("id", access.queue_id)
     .eq("barbershop_id", barbershopId)
     .maybeSingle();
 
   if (ticketError) {
-    throw new Error("NÃ£o foi possÃ­vel localizar o ticket.");
+    throw new Error("Não foi possível localizar o ticket.");
   }
 
   return ticket as PublicQueueTicket | null;
@@ -156,6 +157,6 @@ export async function revokePublicQueueToken(
     .is("revoked_at", null);
 
   if (error) {
-    throw new Error("NÃ£o foi possÃ­vel encerrar o acesso ao ticket.");
+    throw new Error("Não foi possível encerrar o acesso ao ticket.");
   }
 }

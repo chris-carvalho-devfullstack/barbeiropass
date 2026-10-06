@@ -4,12 +4,11 @@ export const runtime = 'edge';
 export const fetchCache = 'force-no-store';
 
 import { createClient } from "@/utils/supabase/server";
-import { createClient as createAdminClient } from "@supabase/supabase-js"; // A MÁGICA AQUI
+import { createAdminClient } from "@/utils/supabase/admin";
 import { notFound } from "next/navigation";
 import { Store } from "lucide-react";
 import Image from "next/image"; 
 import QueueForm from "./queue-form";
-import { cookies } from "next/headers";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -33,6 +32,7 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
   const isLocal = resolvedSearchParams.origem === "balcao";
 
   const supabase = await createClient();
+  const supabaseAdmin = createAdminClient();
 
   const { data: barbershop, error } = await supabase
     .from("barbershops")
@@ -72,99 +72,18 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
 
   const { data: { user } } = await supabase.auth.getUser();
 
-  const { count: queueCount } = await supabase
+  const { count: queueCount } = await supabaseAdmin
     .from("virtual_queue")
-    .select("*", { count: "exact", head: true })
+    .select("id", { count: "exact", head: true })
     .eq("barbershop_id", barbershop.id)
     .eq("status", "waiting");
   
   const initialWaitingCount = queueCount || 0;
 
-  let initialQueueData: InitialQueueData | null = null;
-  let initialUserPosition: number | null = null;
-
-  const cookieStore = await cookies();
-  const walkInQueueId = cookieStore.get("walkInQueueId")?.value;
-
-  // >>> CRIA O CLIENTE ADMIN PARA FURAR O BLOQUEIO RLS <<<
-  const supabaseAdmin = createAdminClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  if (user || walkInQueueId) {
-    let data = null;
-
-    if (user) {
-      // Se tiver conta, a busca normal funciona pois o usuário é dono do ticket
-      const { data: userData } = await supabase
-        .from("virtual_queue")
-        .select("id, status, client_auth_id, barber_name, chair_number, is_rated, joined_at")
-        .eq("barbershop_id", barbershop.id)
-        .eq("client_auth_id", user.id)
-        .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
-        .order("joined_at", { ascending: false }) 
-        .limit(1)
-        .maybeSingle();
-      data = userData;
-    } else if (walkInQueueId) {
-      // Se for AVULSO, usamos a chave Admin para ler o ticket mesmo que o RLS tente esconder!
-      const { data: anonData } = await supabaseAdmin
-        .from("virtual_queue")
-        .select("id, status, client_auth_id, barber_name, chair_number, is_rated, joined_at")
-        .eq("barbershop_id", barbershop.id)
-        .eq("id", walkInQueueId)
-        .in("status", ["waiting", "in_progress", "in_chair", "awaiting_payment", "completed", "finished"])
-        .order("joined_at", { ascending: false }) 
-        .limit(1)
-        .maybeSingle();
-      data = anonData;
-    }
-    
-    if (data) {
-      let isActuallyRated = data.is_rated;
-      const isTerminalStatus = data.status === "awaiting_payment" || data.status === "completed" || data.status === "finished";
-      
-      if (!isActuallyRated && isTerminalStatus) {
-        // Verifica se tem review com Admin Client tbm por segurança
-        const { count } = await supabaseAdmin
-          .from("reviews")
-          .select("*", { count: "exact", head: true })
-          .eq("source_id", data.id);
-          
-        if (count && count > 0) {
-          isActuallyRated = true;
-          await supabaseAdmin.from("virtual_queue").update({ is_rated: true }).eq("id", data.id);
-        }
-      }
-
-      if (!(isTerminalStatus && isActuallyRated === true)) {
-        initialQueueData = {
-          id: data.id,
-          status: data.status,
-          client_auth_id: data.client_auth_id,
-          barber_name: data.barber_name,
-          chair_number: data.chair_number,
-          is_rated: isActuallyRated, 
-          joined_at: data.joined_at,
-        };
-
-        if (data.status === "waiting") {
-          const { data: waitingList } = await supabase
-            .from("virtual_queue")
-            .select("id")
-            .eq("barbershop_id", barbershop.id)
-            .eq("status", "waiting")
-            .order("joined_at", { ascending: true }); 
-
-          if (waitingList) {
-            const index = waitingList.findIndex(item => item.id === data.id);
-            if (index !== -1) initialUserPosition = index + 1; 
-          }
-        }
-      }
-    }
-  }
+  // O ticket do cliente não é mais buscado diretamente nesta página.
+  // A posse do ticket é validada exclusivamente pela API pública através do cookie HttpOnly.
+  const initialQueueData: InitialQueueData | null = null;
+  const initialUserPosition: number | null = null;
 
   return (
     <div className="min-[100dvh] w-full overflow-y-auto overflow-x-hidden pb-12 bg-slate-50 flex flex-col items-center p-6">

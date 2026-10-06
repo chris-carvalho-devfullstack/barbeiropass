@@ -92,6 +92,7 @@ export async function POST(request: Request) {
       "awaiting_payment",
       "completed",
       "finished",
+      "cancelled",
     ];
 
     if (!terminalStatuses.includes(ticket.status)) {

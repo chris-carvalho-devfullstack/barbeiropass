@@ -3,6 +3,9 @@
 
 import { createClient } from "@/utils/supabase/server";
 import { revalidatePath } from "next/cache";
+import { EventLogRepository } from "@/infrastructure/database/supabase/EventLogRepository";
+import { EventLogService } from "@/domain/shared/services/EventLogService";
+import { TenantContext } from "@/domain/shared/TenantContext";
 
 // 1. Entrar na Fila (Ação Legada/Interna - Totem Público)
 export async function joinQueueAction(data: { 
@@ -43,6 +46,28 @@ export async function updateQueueStatusAction(
   serviceIds?: string[] // ATUALIZADO: Agora recebe um Array de IDs de serviços
 ) {
   const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return {
+      error: "Não autorizado."
+    };
+  }
+
+  const { data: member, error: memberError } = await supabase
+    .from("barbershop_members")
+    .select("barbershop_id, role")
+    .eq("profile_id", user.id)
+    .single();
+
+  if (memberError || !member) {
+    return {
+      error: "Vínculo com a barbearia não encontrado."
+    };
+  }
   
   // ==========================================
   // INTERCEPTADOR DA MÁQUINA DE ESTADOS
@@ -52,12 +77,64 @@ export async function updateQueueStatusAction(
     status = "awaiting_payment";
   }
 
+  if (status === "serving") {
+    status = "in_progress";
+  }
+
+  if (status === "canceled") {
+    status = "cancelled";
+  }
+
+  // ==========================================
+  // BUSCA O ESTADO ATUAL DO TICKET
+  // ==========================================
+  const { data: queueItem, error: queueLookupError } = await supabase
+    .from("virtual_queue")
+    .select("id, barbershop_id, status")
+    .eq("id", id)
+    .eq("barbershop_id", member.barbershop_id)
+    .single();
+
+  if (queueLookupError || !queueItem) {
+    return {
+      error: "Atendimento não encontrado ou sem acesso."
+    };
+  }
+
+  const currentStatus = queueItem.status;
+
+  // ==========================================
+  // VALIDAÇÃO DA MÁQUINA DE ESTADOS
+  // ==========================================
+  if (status === "in_progress" && currentStatus !== "waiting") {
+    return {
+      error: "Este cliente não está mais aguardando na fila."
+    };
+  }
+
+  if (status === "cancelled" && currentStatus !== "waiting") {
+    return {
+      error: "Este atendimento já foi iniciado e não pode ser removido da fila."
+    };
+  }
+
+  if (
+    status === "awaiting_payment" &&
+    currentStatus !== "in_progress" &&
+    currentStatus !== "in_chair"
+  ) {
+    return {
+      error: "O atendimento precisa estar iniciado antes de ser finalizado."
+    };
+  }
+
   type QueueUpdatePayload = {
     status: string;
     barber_id?: string | null;
     barber_name?: string | null;
     chair_number?: string | null;
     service_ids?: string[] | null; // ATUALIZADO: Tipagem para suportar o array
+    cancellation_source?: "customer" | "barbershop" | "system" | null;
   };
 
   const updateData: QueueUpdatePayload = { status };
@@ -72,12 +149,12 @@ export async function updateQueueStatusAction(
     let staffRecord = null;
     
     if (!finalBarberId) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (currentUser) {
         const { data: staff } = await supabase
           .from("staff")
           .select(`id, full_name, work_stations ( name )`)
-          .eq("profile_id", user.id)
+          .eq("profile_id", currentUser.id)
           .maybeSingle();
           
         if (staff) {
@@ -105,6 +182,7 @@ export async function updateQueueStatusAction(
 
     updateData.barber_id = finalBarberId;
     updateData.barber_name = staffRecord.full_name;
+    updateData.cancellation_source = null;
     
     // RESOLUÇÃO DO ERRO 'ANY': Tipagem segura para a resposta dinâmica do Supabase
     type WorkStationData = { name?: string } | { name?: string }[] | null;
@@ -117,19 +195,60 @@ export async function updateQueueStatusAction(
     updateData.chair_number = chairName || "Cadeira Principal";
   }
 
+  if (status === "cancelled") {
+    updateData.cancellation_source = "barbershop";
+  }
+
   // ATUALIZADO: Libera a cadeira do barbeiro quando vai pro Caixa (Aguardando Pagamento), Concluído ou Cancelado
-  if (status === "awaiting_payment" || status === "completed" || status === "canceled") {
+  if (status === "awaiting_payment" || status === "completed" || status === "cancelled") {
     updateData.chair_number = null; 
   }
 
-  const { error } = await supabase
+  const { data: updatedQueue, error } = await supabase
     .from("virtual_queue")
     .update(updateData)
-    .eq("id", id);
+    .eq("id", id)
+    .eq("barbershop_id", member.barbershop_id)
+    .eq("status", currentStatus)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     console.error("Erro ao atualizar fila:", error);
     return { error: "Erro ao atualizar status." };
+  }
+
+  if (!updatedQueue) {
+    return {
+      error: "O atendimento foi alterado por outro usuário. Atualize a fila e tente novamente."
+    };
+  }
+
+  if (status === "cancelled") {
+    const context: TenantContext = {
+      tenantId: member.barbershop_id,
+      userId: user.id,
+      role: member.role as TenantContext["role"],
+    };
+
+    try {
+      const eventService = new EventLogService(new EventLogRepository(supabase));
+
+      await eventService.logEvent(context, {
+        entityType: "QUEUE",
+        entityId: id,
+        eventType: "ADMIN_ACTION",
+        performedBy: user.id,
+        payload: {
+          action: "QUEUE_REMOVED",
+          source: "BARBERSHOP",
+          reason: "REMOVED_BEFORE_START"
+        },
+      });
+    } catch (eventError) {
+      console.error("[QUEUE_REMOVE_AUDIT]", eventError);
+      throw eventError;
+    }
   }
 
   revalidatePath("/fila");
