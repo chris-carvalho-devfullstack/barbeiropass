@@ -34,3 +34,79 @@ export async function updateCliente(id: string, data: { name: string; phone?: st
   revalidatePath('/clientes');
   return { success: true };
 }
+
+export async function createClientAction(input: {
+  name: string;
+  phone: string;
+}) {
+  const name = input.name.trim();
+  const phone = input.phone.trim();
+  const phoneDigits = phone.replace(/\D/g, "");
+
+  // Validação dos dados recebidos pelo servidor.
+  if (name.length < 3) {
+    return {
+      error: "O nome deve ter pelo menos 3 caracteres.",
+    };
+  }
+
+  if (phoneDigits.length < 10) {
+    return {
+      error: "Informe um telefone válido com DDD.",
+    };
+  }
+
+  const supabase = await createClient();
+
+  // Confirma a sessão no servidor.
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return {
+      error: "Sessão inválida. Faça login novamente.",
+    };
+  }
+
+  // Obtém a barbearia vinculada ao usuário autenticado.
+  const { data: member, error: memberError } = await supabase
+    .from("barbershop_members")
+    .select("barbershop_id")
+    .eq("profile_id", user.id)
+    .single();
+
+  if (memberError || !member) {
+    return {
+      error: "Não foi possível identificar sua barbearia.",
+    };
+  }
+
+  // Cria o cliente dentro da barbearia correspondente.
+  const { error: insertError } = await supabase
+    .from("clientes")
+    .insert({
+      barbershop_id: member.barbershop_id,
+      name,
+      phone: phoneDigits,
+    });
+
+  if (insertError) {
+    console.error(
+      "[createClientAction] Falha ao criar cliente:",
+      insertError.message
+    );
+
+    return {
+      error: "Não foi possível cadastrar o cliente.",
+    };
+  }
+
+  revalidatePath("/clientes");
+
+  return {
+    success: true,
+    error: null,
+  };
+}

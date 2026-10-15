@@ -5,14 +5,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation"; 
-import { 
-  Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera, 
+import { useRouter } from "next/navigation";
+import {
+  Loader2, Sparkles, LogOut, CheckCircle2, MapPin, Camera,
   Users, Clock, Scissors, Star, MessageSquare, BellRing, Zap, ShieldCheck,
   User as UserIcon, Phone, Mail, XCircle
-} from "lucide-react"; 
-import { type User } from "@supabase/supabase-js"; 
-import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner"; 
+} from "lucide-react";
+import { type User } from "@supabase/supabase-js";
+import { Scanner, IDetectedBarcode } from "@yudiel/react-qr-scanner";
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 
@@ -46,21 +46,38 @@ interface Barber {
   avatar_url?: string | null;
 }
 
+type PublicQueueAvailabilityStatusCode =
+  | "available"
+  | "barbershop_closed"
+  | "professionals_off_shift"
+  | "queue_unavailable"
+  | "no_availability";
+
+interface PublicAvailabilityInfo {
+  status: PublicQueueAvailabilityStatusCode;
+  businessHoursConfigured: boolean;
+  businessOpenNow: boolean | null;
+  nextBusinessOpeningAt: string | null;
+  businessClosesAt: string | null;
+  professionalsAvailableNow: number;
+  nextAvailableAt: string | null;
+}
+
 interface QueueFormProps {
   barbershopId: string;
   barbershopName: string;
   barbers: Barber[];
-  user: User | null; 
+  user: User | null;
   isLocal: boolean;
   initialWaitingCount: number;
-  initialQueueData: { 
-    id: string; 
-    status: string; 
+  initialQueueData: {
+    id: string;
+    status: string;
     client_auth_id: string | null;
-    barber_name: string | null; 
-    chair_number: string | null; 
-    is_rated: boolean; 
-    joined_at: string | null 
+    barber_name: string | null;
+    chair_number: string | null;
+    is_rated: boolean;
+    joined_at: string | null
   } | null;
   initialUserPosition: number | null;
 }
@@ -94,17 +111,17 @@ const applyPhoneMask = (value: string): string => {
   return v.substring(0, 15);
 };
 
-export default function QueueForm({ 
-  barbershopId, 
-  barbershopName, 
-  barbers, 
-  user, 
-  isLocal, 
-  initialWaitingCount, 
-  initialQueueData, 
-  initialUserPosition 
+export default function QueueForm({
+  barbershopId,
+  barbershopName,
+  barbers,
+  user,
+  isLocal,
+  initialWaitingCount,
+  initialQueueData,
+  initialUserPosition
 }: QueueFormProps) {
-  
+
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -115,10 +132,20 @@ export default function QueueForm({
 
   const [waitingCount, setWaitingCount] = useState(initialWaitingCount);
   const [userPosition, setUserPosition] = useState<number | null>(initialUserPosition);
-  
-  const [inQueue, setInQueue] = useState(!!initialQueueData && !isTerminalStatus(initialQueueData.status)); 
+  const [peopleAheadCount, setPeopleAheadCount] = useState<number | null>(
+    initialUserPosition === null
+      ? null
+      : Math.max(0, initialUserPosition - 1)
+  );
+  const [estimatedWaitMinutes, setEstimatedWaitMinutes] = useState<number | null>(null);
+  const [queueEstimateReceived, setQueueEstimateReceived] = useState(false);
+  const [eligibleBarberCount, setEligibleBarberCount] = useState<number | null>(null);
+  const [projectedBarberName, setProjectedBarberName] = useState<string | null>(null);
+  const [publicAvailability, setPublicAvailability] = useState<PublicAvailabilityInfo | null>(null);
+
+  const [inQueue, setInQueue] = useState(!!initialQueueData && !isTerminalStatus(initialQueueData.status));
   const [currentStatus, setCurrentStatus] = useState<string | null>(initialQueueData?.status || null);
-  
+
   const [queueId, setQueueId] = useState<string | null>(initialQueueData?.id || null);
   const queueIdRef = useRef<string | null>(queueId);
   const userRef = useRef<User | null>(user);
@@ -128,7 +155,7 @@ export default function QueueForm({
   );
 
   const [cancellationType, setCancellationType] = useState<"customer" | "barbershop" | "system" | null>(null);
-  
+
   const [walkInName, setWalkInName] = useState<string | null>(null);
 
   // Estados para Login com E-mail
@@ -146,24 +173,28 @@ export default function QueueForm({
   const [hoverBarberRating, setHoverBarberRating] = useState(0);
   const [barbershopRating, setBarbershopRating] = useState(0);
   const [hoverBarbershopRating, setHoverBarbershopRating] = useState(0);
-  
+
   const [reviewComment, setReviewComment] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
-  const turnstileRef = useRef<TurnstileInstance>(null); 
+  const turnstileRef = useRef<TurnstileInstance>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  
+
   const [loading, setLoading] = useState(false);
-  const [isScanning, setIsScanning] = useState(false); 
-  const [showManualPin, setShowManualPin] = useState(false); 
-  const [manualPin, setManualPin] = useState("");            
-  const [verifyingPin, setVerifyingPin] = useState(false);   
+  const [isScanning, setIsScanning] = useState(false);
+  const [showManualPin, setShowManualPin] = useState(false);
+  const [manualPin, setManualPin] = useState("");
+  const [verifyingPin, setVerifyingPin] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
 
-  const [supabase] = useState(() => createClient()); 
-  
+  const [supabase] = useState(() => createClient());
+
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
-  const estimatedWaitTime = waitingCount * 20;
+  // Usa o cálculo real da API após a primeira resposta; antes disso,
+  // mantém uma estimativa provisória para evitar um espaço vazio na interface.
+  const estimatedWaitTime = queueEstimateReceived
+    ? estimatedWaitMinutes
+    : waitingCount * 20;
   const ticketHasLinkedAccount = Boolean(ticketClientAuthId);
 
   const {
@@ -185,6 +216,26 @@ export default function QueueForm({
       hour: "2-digit", minute: "2-digit",
       timeZone: "America/Sao_Paulo"
     });
+  };
+
+  const formatFriendlyScheduleDateTime = (isoString: string | null) => {
+    if (!isoString) return "";
+    return new Date(isoString).toLocaleString("pt-BR", {
+      weekday: "long",
+      day: "2-digit",
+      month: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "America/Sao_Paulo",
+    });
+  };
+
+  const scheduleTimesMatch = (first: string | null, second: string | null) => {
+    if (!first || !second) return false;
+    const firstMs = Date.parse(first);
+    const secondMs = Date.parse(second);
+    return Number.isFinite(firstMs) && Number.isFinite(secondMs) &&
+      Math.abs(firstMs - secondMs) < 60_000;
   };
 
   const getInitials = (name: string) => {
@@ -219,7 +270,7 @@ export default function QueueForm({
     setTurnstileToken(null);
     // Limpeza extra para prevenir estados zumbis
     if (typeof document !== "undefined") {
-      document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT"; 
+      document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
     }
   }, [handleSetQueueId, resetWalkInForm]);
 
@@ -248,10 +299,10 @@ export default function QueueForm({
   // =========================================================================
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    
+
     const isTerminal = isTerminalStatus(currentStatus);
     if (isTerminal && currentStatus !== "cancelled" && hasRated && userRef.current) {
-      setCountdown(20); 
+      setCountdown(20);
       interval = setInterval(() => {
         setCountdown((prev) => {
           if (prev === null) return null;
@@ -266,7 +317,7 @@ export default function QueueForm({
     } else {
       setCountdown(null);
     }
-    
+
     return () => {
       if (interval) clearInterval(interval);
     };
@@ -278,27 +329,129 @@ export default function QueueForm({
   const fetchQueueStatus = useCallback(async () => {
     try {
       const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() || '' : '';
-      
+
       // Chamada limpa baseada apenas no slug (sem o barbershopId)
       const res = await fetch(`/api/public/queue/status?slug=${currentSlug}`);
-      
+
       // Se não encontrou a rota (404), saímos silenciosamente para não estourar a tela.
       if (!res.ok) return;
-      
-      const data = await res.json();
-      
-      setWaitingCount(data.waitingCount || 0);
-      setUserPosition(data.myPosition || null);
 
-      const ticket = data.ticket || data.queueData; 
-      
+      const data = await res.json();
+
+      setWaitingCount(
+        typeof data.waitingCount === "number"
+          ? data.waitingCount
+          : 0
+      );
+
+      setUserPosition(
+        typeof data.myPosition === "number"
+          ? data.myPosition
+          : null
+      );
+
+      const myEstimate =
+        data.myEstimate && typeof data.myEstimate === "object"
+          ? data.myEstimate
+          : null;
+
+      const queueEstimate =
+        data.queueEstimate && typeof data.queueEstimate === "object"
+          ? data.queueEstimate
+          : null;
+
+      const availabilityData =
+        queueEstimate?.publicAvailability &&
+        typeof queueEstimate.publicAvailability === "object"
+          ? queueEstimate.publicAvailability
+          : null;
+
+      if (availabilityData) {
+        const allowedStatuses: PublicQueueAvailabilityStatusCode[] = [
+          "available",
+          "barbershop_closed",
+          "professionals_off_shift",
+          "queue_unavailable",
+          "no_availability",
+        ];
+
+        setPublicAvailability({
+          status: allowedStatuses.includes(availabilityData.status)
+            ? availabilityData.status
+            : "available",
+          businessHoursConfigured: availabilityData.businessHoursConfigured === true,
+          businessOpenNow:
+            typeof availabilityData.businessOpenNow === "boolean"
+              ? availabilityData.businessOpenNow
+              : null,
+          nextBusinessOpeningAt:
+            typeof availabilityData.nextBusinessOpeningAt === "string"
+              ? availabilityData.nextBusinessOpeningAt
+              : null,
+          businessClosesAt:
+            typeof availabilityData.businessClosesAt === "string"
+              ? availabilityData.businessClosesAt
+              : null,
+          professionalsAvailableNow:
+            typeof availabilityData.professionalsAvailableNow === "number"
+              ? availabilityData.professionalsAvailableNow
+              : 0,
+          nextAvailableAt:
+            typeof availabilityData.nextAvailableAt === "string"
+              ? availabilityData.nextAvailableAt
+              : typeof queueEstimate?.estimatedStartAt === "string"
+                ? queueEstimate.estimatedStartAt
+                : null,
+        });
+      } else {
+        setPublicAvailability(null);
+      }
+
+      if (queueEstimate) {
+        setQueueEstimateReceived(true);
+
+        setEligibleBarberCount(
+          typeof queueEstimate.eligibleBarberCount === "number"
+            ? queueEstimate.eligibleBarberCount
+            : 0
+        );
+
+        const ownWait =
+          typeof myEstimate?.estimatedWaitMinutes === "number"
+            ? myEstimate.estimatedWaitMinutes
+            : null;
+
+        const publicWait =
+          typeof queueEstimate.estimatedWaitMinutes === "number"
+            ? queueEstimate.estimatedWaitMinutes
+            : null;
+
+        setEstimatedWaitMinutes(
+          myEstimate ? ownWait : publicWait
+        );
+      }
+
+      setPeopleAheadCount(
+        typeof myEstimate?.peopleAhead === "number"
+          ? myEstimate.peopleAhead
+          : null
+      );
+
+      setProjectedBarberName(
+        typeof myEstimate?.projectedBarberName === "string"
+          ? myEstimate.projectedBarberName
+          : null
+      );
+
+      const ticket = data.ticket || data.queueData;
+
       if (ticket) {
         const isTerminal = isTerminalStatus(ticket.status);
 
         if (isTerminal && ticket.is_rated) {
           if (queueIdRef.current !== ticket.id) {
             handleResetTerminalState();
-            return; 
+            return;
           }
         }
 
@@ -328,7 +481,7 @@ export default function QueueForm({
   }, [currentStatus, isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
 
   const syncRef = useRef(fetchQueueStatus);
-  useEffect(() => { 
+  useEffect(() => {
     syncRef.current = fetchQueueStatus;
   }, [fetchQueueStatus]);
 
@@ -339,8 +492,8 @@ export default function QueueForm({
     // 8 segundos se estiver na fila, 15 segundos se estiver apenas olhando o tamanho da fila
     const interval = setInterval(() => {
       if (syncRef.current) syncRef.current();
-    }, inQueue ? 8000 : 15000); 
-    
+    }, inQueue ? 8000 : 15000);
+
     return () => clearInterval(interval);
   }, [inQueue]);
 
@@ -352,8 +505,8 @@ export default function QueueForm({
     const channel = supabase
       .channel(`public-queue-${barbershopId}`)
       .on(
-        "postgres_changes", 
-        { event: "*", schema: "public", table: "virtual_queue", filter: `barbershop_id=eq.${barbershopId}` }, 
+        "postgres_changes",
+        { event: "*", schema: "public", table: "public_queue_events", filter: `barbershop_id=eq.${barbershopId}` },
         () => {
            if (syncRef.current) syncRef.current();
         }
@@ -389,7 +542,7 @@ export default function QueueForm({
         const parts = value.split(`; ${name}=`);
         if (parts.length === 2) return parts.pop()?.split(';').shift();
       };
-      
+
       const savedQueueId = getCookie("walkInQueueId");
       if (savedQueueId && savedQueueId !== "undefined" && savedQueueId !== "null") {
         handleSetQueueId(savedQueueId);
@@ -406,17 +559,17 @@ export default function QueueForm({
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-    if (!turnstileToken && !isLocalhost) { 
-      toast.error("Aguarde a validação de segurança..."); 
-      return; 
+    if (!turnstileToken && !isLocalhost) {
+      toast.error("Aguarde a validação de segurança...");
+      return;
     }
     if (!loginEmail || !loginPassword) {
       toast.error("Preencha e-mail e senha para continuar.");
       return;
     }
-    
+
     setLoading(true);
-    
+
     const { error } = await supabase.auth.signInWithPassword({
       email: loginEmail,
       password: loginPassword,
@@ -429,17 +582,17 @@ export default function QueueForm({
       setTurnstileToken(null);
     } else {
       toast.success("Login realizado com sucesso!");
-      window.location.reload(); 
+      window.location.reload();
     }
   };
 
   const handleGoogleLogin = async () => {
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-    if (!turnstileToken && !isLocalhost) { 
-      toast.error("Aguarde a validação de segurança..."); 
-      return; 
+    if (!turnstileToken && !isLocalhost) {
+      toast.error("Aguarde a validação de segurança...");
+      return;
     }
-    
+
     setLoading(true);
     const currentPath = window.location.pathname;
     let nextUrl = isLocal ? `${currentPath}?origem=balcao` : currentPath;
@@ -448,25 +601,25 @@ export default function QueueForm({
       nextUrl += (nextUrl.includes('?') ? '&' : '?') + `link_queue=${queueIdRef.current}`;
     }
 
-    const { error } = await supabase.auth.signInWithOAuth({ 
-      provider: "google", 
-      options: { 
-        redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(nextUrl)}` 
-      } 
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(nextUrl)}`
+      }
     });
-    
-    if (error) { 
-      toast.error("Erro ao conectar com Google."); 
-      setLoading(false); 
+
+    if (error) {
+      toast.error("Erro ao conectar com Google.");
+      setLoading(false);
       turnstileRef.current?.reset();
       setTurnstileToken(null);
     }
   };
 
-  const handleLogout = async () => { 
-    setLoading(true); 
-    await supabase.auth.signOut(); 
-    window.location.assign(window.location.pathname); 
+  const handleLogout = async () => {
+    setLoading(true);
+    await supabase.auth.signOut();
+    window.location.assign(window.location.pathname);
   };
 
   // =========================================================================
@@ -474,29 +627,29 @@ export default function QueueForm({
   // =========================================================================
   const handleJoinQueue = async () => {
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-    if (!turnstileToken && !isLocalhost) { 
-      toast.error("Aguarde a validação de segurança..."); 
-      return; 
+    if (!turnstileToken && !isLocalhost) {
+      toast.error("Aguarde a validação de segurança...");
+      return;
     }
-    
+
     setLoading(true);
     try {
       const finalBarberId = selectedBarberId === "next" ? null : selectedBarberId;
       const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
-      
+
       const res = await fetch('/api/public/queue/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           slug: currentSlug,
           clientName: userName,
           barberId: finalBarberId,
-          turnstileToken: turnstileToken || "bypass_for_localhost" 
+          turnstileToken: turnstileToken || "bypass_for_localhost"
         })
       });
 
       const result = await res.json();
-      
+
       if (!res.ok || result.error) {
         toast.error(result.error || "Erro ao entrar na fila.");
         turnstileRef.current?.reset();
@@ -519,11 +672,11 @@ export default function QueueForm({
 
   const onSubmitWalkIn = async (data: WalkInFormValues) => {
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-    if (!turnstileToken && !isLocalhost) { 
-      toast.error("Aguarde a validação de segurança..."); 
-      return; 
+    if (!turnstileToken && !isLocalhost) {
+      toast.error("Aguarde a validação de segurança...");
+      return;
     }
-    
+
     try {
       const finalBarberId = selectedBarberId === "next" ? null : selectedBarberId;
       const currentSlug = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean).pop() : '';
@@ -531,18 +684,18 @@ export default function QueueForm({
       const res = await fetch('/api/public/queue/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           slug: currentSlug,
           clientName: data.clientName,
           phone: data.phone,
           email: data.email,
           barberId: finalBarberId,
-          turnstileToken: turnstileToken || "bypass_for_localhost" 
+          turnstileToken: turnstileToken || "bypass_for_localhost"
         })
       });
 
       const result = await res.json();
-      
+
       if (!res.ok || result.error) {
         toast.error(result.error || "Erro ao adicionar cliente.");
         turnstileRef.current?.reset();
@@ -553,7 +706,7 @@ export default function QueueForm({
         setInQueue(true);
         setCurrentStatus("waiting");
         setCancellationType(null);
-        
+
         if (syncRef.current) syncRef.current();
       }
     } catch (error) {
@@ -647,14 +800,14 @@ export default function QueueForm({
       const res = await fetch('/api/public/verify-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          slug: currentSlug, 
+        body: JSON.stringify({
+          slug: currentSlug,
           providedPin: manualPin,
           pin: manualPin
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         window.location.assign(`${window.location.pathname}?origem=balcao`);
       } else {
@@ -676,20 +829,20 @@ export default function QueueForm({
       const res = await fetch('/api/public/queue/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           slug: currentSlug,
-          barberName, 
-          barberRating, 
-          barbershopRating, 
+          barberName,
+          barberRating,
+          barbershopRating,
           comment: reviewComment,
-          skipped: false 
+          skipped: false
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         toast.success("Obrigado pela sua avaliação!");
-        setHasRated(true); 
+        setHasRated(true);
       } else {
         toast.error(result.error || "Erro ao enviar avaliação.");
       }
@@ -708,15 +861,15 @@ export default function QueueForm({
       const res = await fetch('/api/public/queue/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           slug: currentSlug,
           skipped: true
         })
       });
-      
+
       const result = await res.json();
       if (res.ok && result.success) {
-        setHasRated(true); 
+        setHasRated(true);
       } else {
         toast.error(result.error || "Erro ao pular avaliação.");
       }
@@ -730,13 +883,13 @@ export default function QueueForm({
   const handleScanSuccess = (detectedCodes: IDetectedBarcode[]) => {
     if (detectedCodes && detectedCodes.length > 0) {
       const text = detectedCodes[0].rawValue;
-      if (text.includes("origem=balcao")) { 
-        toast.success("Presença confirmada!"); 
-        setIsScanning(false); 
-        window.location.assign(text); 
-      } else { 
-        toast.error("QR Code inválido."); 
-        setIsScanning(false); 
+      if (text.includes("origem=balcao")) {
+        toast.success("Presença confirmada!");
+        setIsScanning(false);
+        window.location.assign(text);
+      } else {
+        toast.error("QR Code inválido.");
+        setIsScanning(false);
       }
     }
   };
@@ -805,26 +958,162 @@ export default function QueueForm({
     );
   };
 
-  if (!mounted) return null; 
+  if (!mounted) return null;
 
   return (
     <div className="w-full space-y-6">
-      
+
       {!isTerminalStatus(currentStatus) && (
-        <div className="flex items-center justify-center gap-8 py-4 border-b border-slate-100 mb-2">
-           <div className="flex flex-col items-center">
-             <Users className="text-blue-500 mb-1" size={24} />
-             <span className="font-black text-slate-800 text-lg">{waitingCount}</span>
-             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Na Fila</span>
-           </div>
-           <div className="w-px h-10 bg-slate-100"></div>
-           <div className="flex flex-col items-center">
-             <Clock className="text-amber-500 mb-1" size={24} />
-             <span className="font-black text-slate-800 text-lg">{estimatedWaitTime} <span className="text-sm">min</span></span>
-             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Espera Est.</span>
-           </div>
+        <div className="flex flex-wrap items-center justify-center gap-6 sm:gap-8 py-4 border-b border-slate-100 mb-2">
+          <div className="flex flex-col items-center">
+            <Users className="text-blue-500 mb-1" size={24} />
+            <span className="font-black text-slate-800 text-lg">{waitingCount}</span>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Na Fila</span>
+          </div>
+
+          <div className="w-px h-10 bg-slate-100" />
+
+          <div className="flex flex-col items-center">
+            <Clock className="text-amber-500 mb-1" size={24} />
+            <span className="font-black text-slate-800 text-lg">
+              {publicAvailability && publicAvailability.status !== "available"
+                ? publicAvailability.status === "barbershop_closed"
+                  ? "Fechado"
+                  : publicAvailability.status === "professionals_off_shift"
+                    ? "Fora do horário"
+                    : publicAvailability.status === "queue_unavailable"
+                      ? "Indisponível"
+                      : "Sem horário"
+                : estimatedWaitTime === null
+                  ? "—"
+                  : estimatedWaitTime}
+              {(!publicAvailability || publicAvailability.status === "available") &&
+                estimatedWaitTime !== null && <span className="text-sm"> min</span>}
+            </span>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+              {publicAvailability && publicAvailability.status !== "available"
+                ? "Situação"
+                : "Espera Est."}
+            </span>
+          </div>
+
+          <div className="w-px h-10 bg-slate-100" />
+
+          <div className="flex flex-col items-center">
+            <Scissors className="text-emerald-500 mb-1" size={24} />
+            <span className="font-black text-slate-800 text-lg">
+              {eligibleBarberCount === null ? "—" : eligibleBarberCount}
+            </span>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+              {publicAvailability && publicAvailability.status !== "available"
+                ? "Profissionais na agenda"
+                : "Barbeiros"}
+            </span>
+          </div>
         </div>
       )}
+
+      {publicAvailability &&
+        publicAvailability.status !== "available" &&
+        !isTerminalStatus(currentStatus) &&
+        !isScanning &&
+        !showManualPin && (
+          <div
+            role="status"
+            className={cn(
+              "w-full rounded-2xl border p-4 text-center animate-in fade-in",
+              publicAvailability.status === "barbershop_closed"
+                ? "border-amber-200 bg-amber-50"
+                : "border-blue-200 bg-blue-50"
+            )}
+          >
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <Clock
+                className={cn(
+                  "size-5",
+                  publicAvailability.status === "barbershop_closed"
+                    ? "text-amber-600"
+                    : "text-blue-600"
+                )}
+              />
+              <h4
+                className={cn(
+                  "font-bold",
+                  publicAvailability.status === "barbershop_closed"
+                    ? "text-amber-950"
+                    : "text-blue-950"
+                )}
+              >
+                {publicAvailability.status === "barbershop_closed"
+                  ? "Estamos fechados neste momento"
+                  : publicAvailability.status === "professionals_off_shift"
+                    ? "Nossa equipe não está atendendo neste horário"
+                    : publicAvailability.status === "queue_unavailable"
+                      ? "A fila virtual está indisponível"
+                      : "Não encontramos um próximo horário disponível"}
+              </h4>
+            </div>
+
+            <p
+              className={cn(
+                "text-sm leading-relaxed",
+                publicAvailability.status === "barbershop_closed"
+                  ? "text-amber-900/90"
+                  : "text-blue-900/90"
+              )}
+            >
+              {publicAvailability.status === "barbershop_closed"
+                ? "A barbearia já encerrou o expediente. A previsão considera nosso horário de funcionamento e será retomada na próxima abertura."
+                : publicAvailability.status === "professionals_off_shift"
+                  ? "Os horários e as pausas dos profissionais limitam quando um novo atendimento pode começar."
+                  : publicAvailability.status === "queue_unavailable"
+                    ? "No momento, não estamos aceitando novas entradas pela fila virtual. Consulte a recepção para conferir as opções de atendimento."
+                    : "Não há um horário futuro confirmado na agenda atual. Entre em contato com a recepção para verificar a próxima disponibilidade."}
+            </p>
+
+            {publicAvailability.status === "barbershop_closed" &&
+              publicAvailability.nextBusinessOpeningAt && (
+                <p className="mt-2 text-sm font-semibold text-amber-950">
+                  Próxima abertura: {formatFriendlyScheduleDateTime(publicAvailability.nextBusinessOpeningAt)}.
+                </p>
+              )}
+
+            {publicAvailability.status === "barbershop_closed" &&
+              !publicAvailability.nextBusinessOpeningAt && (
+                <p className="mt-2 text-sm font-semibold text-amber-950">
+                  Não há uma próxima abertura cadastrada. Entre em contato com a recepção para confirmar os horários.
+                </p>
+              )}
+
+            {publicAvailability.status === "barbershop_closed" &&
+              publicAvailability.nextBusinessOpeningAt &&
+              !publicAvailability.nextAvailableAt && (
+                <p className="mt-1 text-sm text-amber-950/90">
+                  A disponibilidade de um profissional após a abertura ainda precisa ser confirmada.
+                </p>
+              )}
+
+            {publicAvailability.nextAvailableAt &&
+              !scheduleTimesMatch(
+                publicAvailability.status === "barbershop_closed"
+                  ? publicAvailability.nextBusinessOpeningAt
+                  : null,
+                publicAvailability.nextAvailableAt
+              ) &&
+              publicAvailability.status !== "queue_unavailable" && (
+                <p
+                  className={cn(
+                    "mt-1 text-sm font-semibold",
+                    publicAvailability.status === "barbershop_closed"
+                      ? "text-amber-950"
+                      : "text-blue-950"
+                  )}
+                >
+                  Próximo atendimento disponível: {formatFriendlyScheduleDateTime(publicAvailability.nextAvailableAt)}.
+                </p>
+              )}
+          </div>
+        )}
 
       {!isScanning && !showManualPin && !isTerminalStatus(currentStatus) && (
         <p className="text-sm font-medium text-slate-600 text-center">
@@ -855,9 +1144,9 @@ export default function QueueForm({
                     <Camera className="mr-2" size={20} /> Ler QR Code da Recepção
                   </Button>
                   <button type="button" onClick={() => setShowManualPin(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-4 pt-2 pb-2 transition-colors">
-                    Câmera não funciona? Digitar código
+                    Ou Digite o Código PIN
                   </button>
-                  
+
                   {user ? (
                     <button type="button" onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 border-t border-slate-100 mt-2">
                       <LogOut size={14} /> Sair da conta
@@ -919,11 +1208,11 @@ export default function QueueForm({
 
                   <TabsContent value="login" className="space-y-6 animate-in fade-in">
                     <div className="space-y-3">
-                      <Button 
+                      <Button
                         type="button"
-                        onClick={handleGoogleLogin} 
-                        disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} 
-                        variant="outline" 
+                        onClick={handleGoogleLogin}
+                        disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')}
+                        variant="outline"
                         className="w-full h-14 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-2xl shadow-sm transition-all active:scale-[0.98]"
                       >
                         {loading ? <Loader2 className="animate-spin size-5 text-slate-400" /> : (
@@ -949,12 +1238,12 @@ export default function QueueForm({
                         <label className="text-xs font-bold text-slate-500 uppercase ml-1">E-mail</label>
                         <div className="relative mt-1">
                           <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                          <Input 
-                            type="email" 
+                          <Input
+                            type="email"
                             value={loginEmail}
                             onChange={(e) => setLoginEmail(e.target.value)}
-                            placeholder="seu@email.com" 
-                            className="pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20" 
+                            placeholder="seu@email.com"
+                            className="pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20"
                           />
                         </div>
                       </div>
@@ -966,19 +1255,19 @@ export default function QueueForm({
                         </div>
                         <div className="relative mt-1">
                           <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                          <Input 
-                            type="password" 
+                          <Input
+                            type="password"
                             value={loginPassword}
                             onChange={(e) => setLoginPassword(e.target.value)}
-                            placeholder="Sua senha secreta" 
-                            className="pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20" 
+                            placeholder="Sua senha secreta"
+                            className="pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20"
                           />
                         </div>
                       </div>
 
-                      <Button 
-                        type="submit" 
-                        disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} 
+                      <Button
+                        type="submit"
+                        disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')}
                         className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl shadow-lg transition-all active:scale-[0.98]"
                       >
                         {loading ? <Loader2 className="animate-spin size-6" /> : "Entrar com E-mail"}
@@ -995,10 +1284,10 @@ export default function QueueForm({
                           <label className="text-xs font-bold text-slate-500 uppercase ml-1">Seu Nome *</label>
                           <div className="relative mt-1">
                             <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                            <Input 
-                              {...register("clientName")} 
-                              placeholder="Como podemos te chamar?" 
-                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.clientName ? 'border-red-400' : ''}`} 
+                            <Input
+                              {...register("clientName")}
+                              placeholder="Como podemos te chamar?"
+                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.clientName ? 'border-red-400' : ''}`}
                             />
                           </div>
                           {errors.clientName && <span className="text-[10px] text-red-500 font-bold ml-1 mt-1 block">{errors.clientName.message}</span>}
@@ -1008,16 +1297,16 @@ export default function QueueForm({
                           <label className="text-xs font-bold text-slate-500 uppercase ml-1">WhatsApp (Opcional)</label>
                           <div className="relative mt-1">
                             <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                            <Input 
-                              {...register("phone")} 
-                              placeholder="(11) 99999-9999" 
+                            <Input
+                              {...register("phone")}
+                              placeholder="(11) 99999-9999"
                               maxLength={15}
                               onChange={(e) => {
                                 const masked = applyPhoneMask(e.target.value);
                                 e.target.value = masked;
                                 setValue("phone", masked, { shouldValidate: true });
                               }}
-                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.phone ? 'border-red-400' : ''}`} 
+                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.phone ? 'border-red-400' : ''}`}
                             />
                           </div>
                           {errors.phone && <span className="text-[10px] text-red-500 font-bold ml-1 mt-1 block">{errors.phone.message}</span>}
@@ -1027,11 +1316,11 @@ export default function QueueForm({
                           <label className="text-xs font-bold text-slate-500 uppercase ml-1">E-mail (Opcional)</label>
                           <div className="relative mt-1">
                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                            <Input 
-                              {...register("email")} 
+                            <Input
+                              {...register("email")}
                               type="email"
-                              placeholder="Para enviar seu recibo" 
-                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.email ? 'border-red-400' : ''}`} 
+                              placeholder="Para enviar seu recibo"
+                              className={`pl-9 bg-slate-50 border-slate-200 rounded-xl focus-visible:ring-blue-600/20 ${errors.email ? 'border-red-400' : ''}`}
                             />
                           </div>
                           {errors.email && <span className="text-[10px] text-red-500 font-bold ml-1 mt-1 block">{errors.email.message}</span>}
@@ -1040,7 +1329,7 @@ export default function QueueForm({
 
                       {renderBarberSelection()}
                       {renderTurnstile()}
-                      
+
                       <Button type="submit" disabled={isSubmittingWalkIn || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')} className="w-full h-16 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98]">
                         {isSubmittingWalkIn ? <Loader2 className="animate-spin size-6" /> : <div className="flex items-center gap-2"><Sparkles className="size-5" /><span>Entrar na Fila</span></div>}
                       </Button>
@@ -1088,7 +1377,7 @@ export default function QueueForm({
             </div>
 
             <div className="w-full">
-              <Button 
+              <Button
                 type="button"
                 onClick={handleDismissCompletedTicket}
                 className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
@@ -1105,14 +1394,14 @@ export default function QueueForm({
       {/* ========================================================= */}
       {isTerminalStatus(currentStatus) && currentStatus !== "cancelled" && (
         <div className="w-full animate-in zoom-in duration-300">
-          
+
           {/* SE NÃO TEM CONTA: MOSTRA A TELA DE CONVERSÃO */}
           {!ticketHasLinkedAccount ? (
             <div className="bg-white border-2 border-blue-100 rounded-[2rem] p-6 shadow-xl shadow-blue-100/50 flex flex-col items-center space-y-6">
               <div className="h-16 w-16 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg shadow-blue-200">
                 <Sparkles size={32} />
               </div>
-              
+
               <div className="text-center space-y-2">
                 <h3 className="font-black text-slate-900 text-2xl">Ficou no capricho?</h3>
                 <p className="text-sm text-slate-500 font-medium">
@@ -1141,9 +1430,9 @@ export default function QueueForm({
 
               <div className="w-full space-y-3 pt-2">
                 {renderTurnstile()}
-                <Button 
+                <Button
                   type="button"
-                  onClick={handleGoogleLogin} 
+                  onClick={handleGoogleLogin}
                   disabled={loading || (!turnstileToken && typeof window !== 'undefined' && window.location.hostname !== 'localhost')}
                   className="w-full h-14 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-black rounded-2xl shadow-lg shadow-slate-200/50 transition-all active:scale-[0.98]"
                 >
@@ -1154,9 +1443,9 @@ export default function QueueForm({
                     </div>
                   )}
                 </Button>
-                <button 
+                <button
                   type="button"
-                  onClick={handleDismissCompletedTicket} 
+                  onClick={handleDismissCompletedTicket}
                   className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-2 transition-colors"
                 >
                   Agora não, só quero sair
@@ -1172,7 +1461,7 @@ export default function QueueForm({
                     <h3 className="font-black text-slate-900 text-xl">Como foi a experiência?</h3>
                     <p className="text-sm text-slate-500 font-medium">Sua opinião ajuda a melhorar o serviço.</p>
                   </div>
-    
+
                   <div className="w-full space-y-5">
                     <div className="flex flex-col items-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <p className="text-sm font-bold text-slate-700 mb-2">O atendimento com {barberName}</p>
@@ -1184,7 +1473,7 @@ export default function QueueForm({
                         ))}
                       </div>
                     </div>
-    
+
                     <div className="flex flex-col items-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <p className="text-sm font-bold text-slate-700 mb-2">O ambiente ({barbershopName})</p>
                       <div className="flex gap-1">
@@ -1196,24 +1485,24 @@ export default function QueueForm({
                       </div>
                     </div>
                   </div>
-    
+
                   <div className="w-full relative">
                     <MessageSquare className="absolute left-3 top-3 text-slate-400 size-5" />
                     <textarea placeholder="Deixe um elogio (opcional)..." value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl pl-10 pr-4 py-3 text-sm font-medium text-slate-700 focus:border-amber-400 focus:ring-0 outline-none resize-none h-20" />
                   </div>
-    
+
                   <div className="w-full space-y-3 pt-2">
-                    <Button 
+                    <Button
                       type="button"
-                      onClick={handleSubmitReview} 
-                      disabled={barberRating === 0 || barbershopRating === 0 || isSubmittingReview} 
+                      onClick={handleSubmitReview}
+                      disabled={barberRating === 0 || barbershopRating === 0 || isSubmittingReview}
                       className="w-full h-14 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl shadow-lg shadow-amber-200 transition-all active:scale-[0.98]"
                     >
                       {isSubmittingReview ? <Loader2 className="animate-spin" /> : "Enviar Avaliação"}
                     </Button>
-                    <button 
+                    <button
                       type="button"
-                      onClick={handleSkipReview} 
+                      onClick={handleSkipReview}
                       disabled={isSubmittingReview}
                       className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-2 disabled:opacity-50"
                     >
@@ -1234,16 +1523,16 @@ export default function QueueForm({
                        Ficamos felizes por escolher a <span className="font-bold text-blue-600">{barbershopName}</span>!
                      </p>
                    </div>
-                   
+
                    <div className="w-full space-y-4 pt-4 border-t border-slate-100">
                      {!isLocal && (
                        <p className="text-xs font-bold text-amber-500 bg-amber-50 px-4 py-3 rounded-lg text-center">
                          Para entrar na fila novamente, faça a leitura do QR Code na recepção.
                        </p>
                      )}
-                     <Button 
+                     <Button
                        type="button"
-                       onClick={user ? handleResetTerminalState : handleResetWalkInView} 
+                       onClick={user ? handleResetTerminalState : handleResetWalkInView}
                        className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
                      >
                        Voltar para a Tela Inicial {countdown !== null ? `(${countdown}s)` : ""}
@@ -1251,7 +1540,7 @@ export default function QueueForm({
                    </div>
                 </div>
               )}
-              
+
               <button type="button" onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
                 <LogOut size={14} /> Sair da conta Google
               </button>
@@ -1298,6 +1587,25 @@ export default function QueueForm({
                  </>
               )}
 
+              {peopleAheadCount !== null && (
+                <p className="text-sm text-slate-500 text-center font-medium">
+                  {peopleAheadCount === 0
+                    ? "Não há pessoas à sua frente."
+                    : `Há ${peopleAheadCount} ${
+                        peopleAheadCount === 1 ? "pessoa" : "pessoas"
+                      } à sua frente.`}
+                </p>
+              )}
+
+              {projectedBarberName && (
+                <p className="text-xs text-slate-500 text-center">
+                  Previsão de atendimento com{" "}
+                  <span className="font-bold text-slate-700">
+                    {projectedBarberName}
+                  </span>
+                </p>
+              )}
+
               <div className="w-full pt-4 space-y-3">
                  <Button type="button" onClick={handleLeaveQueue} variant="outline" className="w-full h-12 border-red-100 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 font-semibold rounded-xl transition-all">
                    <XCircle className="size-4 mr-2" /> Cancelar / Sair da Fila
@@ -1305,7 +1613,7 @@ export default function QueueForm({
               </div>
             </div>
           )}
-          
+
           {user && (
             <button type="button" onClick={handleLogout} className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-400 hover:text-slate-700 transition-colors py-2 mt-6 border-t border-slate-100 w-full pt-4">
               <LogOut size={14} /> Sair da conta Google

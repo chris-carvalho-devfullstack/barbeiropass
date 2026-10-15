@@ -3,96 +3,168 @@ export const runtime = "edge";
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
 import { createAdminClient } from "@/utils/supabase/admin";
+
 import {
   clearPublicQueueAccessCookie,
   getOwnedPublicQueueTicket,
   publicSlugSchema,
   resolvePublicBarbershop,
 } from "@/app/api/public/_shared";
+
 import { PUBLIC_QUEUE_ACCESS_COOKIE } from "@/lib/public-queue-security";
 
-const querySchema = z.object({ slug: publicSlugSchema });
+import { calculateSupabaseQueueWaitTimes } from "@/infrastructure/database/supabase/SupabaseQueueWaitTimeService";
+
+const querySchema = z.object({
+  slug: publicSlugSchema,
+});
+
+const PUBLIC_PREVIEW_TICKET_ID = "__public_queue_preview__";
 
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const parsed = querySchema.safeParse({ slug: url.searchParams.get("slug") });
-    
+
+    const parsed = querySchema.safeParse({
+      slug: url.searchParams.get("slug"),
+    });
+
     if (!parsed.success) {
-      return NextResponse.json({ error: "Link da barbearia inválido." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Link da barbearia inválido." },
+        { status: 400 }
+      );
     }
 
     const admin = createAdminClient();
-    const barbershop = await resolvePublicBarbershop(admin, parsed.data.slug);
-    
+    const barbershop = await resolvePublicBarbershop(
+      admin,
+      parsed.data.slug
+    );
+
     if (!barbershop) {
-      return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
+      return NextResponse.json(
+        { error: "Barbearia não encontrada." },
+        { status: 404 }
+      );
     }
 
-    // 1. Sempre buscamos a contagem total de pessoas na fila, independente de ticket
-    const { count: waitingCount, error: countError } = await admin
-      .from("virtual_queue")
-      .select("id", { count: "exact", head: true })
-      .eq("barbershop_id", barbershop.id)
-      .eq("status", "waiting");
-      
-    if (countError) throw new Error("Não foi possível consultar a fila.");
-
-    // 2. Verificamos se o usuário tem um cookie de acesso à fila
+    // O cookie contém um token HttpOnly, validado no servidor.
     const token = request.headers
       .get("cookie")
       ?.split(";")
       .map((value) => value.trim())
-      .find((value) => value.startsWith(`${PUBLIC_QUEUE_ACCESS_COOKIE}=`))
+      .find((value) =>
+        value.startsWith(`${PUBLIC_QUEUE_ACCESS_COOKIE}=`)
+      )
       ?.slice(`${PUBLIC_QUEUE_ACCESS_COOKIE}=`.length);
 
-    let ticket = null;
-    let position: number | null = null;
+    let ticket:
+      Awaited<ReturnType<typeof getOwnedPublicQueueTicket>> = null;
+
     let responseMustClearCookie = false;
 
-    // 3. Se ele tiver o cookie, tentamos validar o ticket dele
     if (token) {
-      ticket = await getOwnedPublicQueueTicket(admin, token, barbershop.id);
-      
+      ticket = await getOwnedPublicQueueTicket(
+        admin,
+        token,
+        barbershop.id
+      );
+
       if (!ticket) {
-        // O cookie existe, mas é velho ou inválido. Não damos 404, apenas limpamos o cookie.
+        // Token inválido ou expirado: limpar sem expor informações.
         responseMustClearCookie = true;
-      } else if (ticket.status === "waiting" && ticket.joined_at) {
-        // Se tem ticket válido e está esperando, calcula a posição
-        const { count: aheadCount, error: positionError } = await admin
-          .from("virtual_queue")
-          .select("id", { count: "exact", head: true })
-          .eq("barbershop_id", barbershop.id)
-          .eq("status", "waiting")
-          .lte("joined_at", ticket.joined_at);
-          
-        if (!positionError) {
-          position = aheadCount ?? null;
-        }
       }
     }
 
-    // 4. Montamos o payload estruturado exatamente como o front-end espera
+    // Calcula a fila e simula um visitante adicional sem persistir
+    // um ticket artificial no banco.
+    const queueState = await calculateSupabaseQueueWaitTimes({
+      barbershopId: barbershop.id,
+      timeZone: "America/Sao_Paulo",
+      daysAhead: 14,
+      includePublicPreview: true,
+    });
+
+    const previewEstimate =
+      queueState.estimate.estimates.find(
+        (estimate) =>
+          estimate.ticketId === PUBLIC_PREVIEW_TICKET_ID
+      ) ?? null;
+
+    // Só procuramos a estimativa individual do ticket depois de validar
+    // o cookie de posse e somente quando o cliente ainda está aguardando.
+    const myEstimate =
+      ticket?.status === "waiting"
+        ? queueState.estimate.estimates.find(
+            (estimate) => estimate.ticketId === ticket?.id
+          ) ?? null
+        : null;
+
     const response = NextResponse.json(
       {
-        waitingCount: waitingCount ?? 0,
-        myPosition: position,
-        ticket: ticket ? {
-          id: ticket.id,
-          status: ticket.status,
-          client_auth_id: ticket.client_auth_id,
-          barber_name: ticket.barber_name,
-          chair_number: ticket.chair_number,
-          is_rated: ticket.is_rated,
-          joined_at: ticket.joined_at,
-          cancellation_type: ticket.cancellation_source
-        } : null
+        waitingCount: queueState.waitingCount,
+
+        myPosition: myEstimate?.position ?? null,
+        peopleAhead: myEstimate?.peopleAhead ?? null,
+
+        myEstimate: myEstimate
+          ? {
+              position: myEstimate.position,
+              peopleAhead: myEstimate.peopleAhead,
+              estimatedWaitMinutes:
+                myEstimate.estimatedWaitMinutes,
+              estimatedStartAt:
+                myEstimate.estimatedStartAt,
+              projectedBarberName:
+                myEstimate.projectedBarberName,
+              usesAlternativeBarber:
+                myEstimate.usesAlternativeBarber,
+              preferredBarberPosition:
+                myEstimate.preferredBarberPosition,
+              preferredBarberPeopleAhead:
+                myEstimate.preferredBarberPeopleAhead,
+            }
+          : null,
+
+        // Dados agregados para a consulta pública antes do check-in.
+        // Não são incluídos IDs de tickets ou dados de outros clientes.
+        queueEstimate: {
+          estimatedWaitMinutes:
+            previewEstimate?.estimatedWaitMinutes ?? null,
+          estimatedStartAt:
+            previewEstimate?.estimatedStartAt ?? null,
+          eligibleBarberCount:
+            queueState.eligibleBarberCount,
+          acceptsQueue:
+            queueState.barbershopAcceptsQueue,
+          publicAvailability: queueState.publicAvailability,
+        },
+
+        // Contrato anterior mantido para não quebrar o fluxo existente.
+        // Este objeto contém apenas o ticket validado pelo cookie.
+        ticket: ticket
+          ? {
+              id: ticket.id,
+              status: ticket.status,
+              client_auth_id: ticket.client_auth_id,
+              barber_name: ticket.barber_name,
+              chair_number: ticket.chair_number,
+              is_rated: ticket.is_rated,
+              joined_at: ticket.joined_at,
+              cancellation_type: ticket.cancellation_source,
+            }
+          : null,
       },
-      { headers: { "Cache-Control": "private, no-store" } }
+      {
+        headers: {
+          "Cache-Control": "private, no-store",
+        },
+      }
     );
 
-    // Se o cookie estava obsoleto, a gente limpa do navegador do cliente silenciosamente
     if (responseMustClearCookie) {
       return clearPublicQueueAccessCookie(response);
     }
@@ -100,6 +172,7 @@ export async function GET(request: Request) {
     return response;
   } catch (error) {
     console.error("[PUBLIC_QUEUE_STATUS]", error);
+
     return NextResponse.json(
       { error: "Não foi possível consultar o status." },
       { status: 500 }
