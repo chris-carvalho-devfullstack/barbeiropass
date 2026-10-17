@@ -195,6 +195,13 @@ export default function QueueForm({
   const estimatedWaitTime = queueEstimateReceived
     ? estimatedWaitMinutes
     : waitingCount * 20;
+  const isActiveServiceStatus =
+    currentStatus === "in_progress" || currentStatus === "in_chair";
+  const canShowPublicQueueMetrics = publicAvailability?.status === "available";
+  const canShowPersonalWaitEstimate =
+    canShowPublicQueueMetrics ||
+    (inQueue && currentStatus === "waiting" && queueEstimateReceived);
+  const canEnterPublicQueue = publicAvailability?.status === "available";
   const ticketHasLinkedAccount = Boolean(ticketClientAuthId);
 
   const {
@@ -228,14 +235,6 @@ export default function QueueForm({
       minute: "2-digit",
       timeZone: "America/Sao_Paulo",
     });
-  };
-
-  const scheduleTimesMatch = (first: string | null, second: string | null) => {
-    if (!first || !second) return false;
-    const firstMs = Date.parse(first);
-    const secondMs = Date.parse(second);
-    return Number.isFinite(firstMs) && Number.isFinite(secondMs) &&
-      Math.abs(firstMs - secondMs) < 60_000;
   };
 
   const getInitials = (name: string) => {
@@ -626,6 +625,15 @@ export default function QueueForm({
   // HANDLERS SEGUROS (Consumindo nova API Server-side)
   // =========================================================================
   const handleJoinQueue = async () => {
+    if (!canEnterPublicQueue) {
+      toast.error(
+        publicAvailability === null
+          ? "Estamos verificando a disponibilidade da fila. Tente novamente em instantes."
+          : "A fila pública não está disponível neste momento."
+      );
+      return;
+    }
+
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (!turnstileToken && !isLocalhost) {
       toast.error("Aguarde a validação de segurança...");
@@ -671,6 +679,15 @@ export default function QueueForm({
   };
 
   const onSubmitWalkIn = async (data: WalkInFormValues) => {
+    if (!canEnterPublicQueue) {
+      toast.error(
+        publicAvailability === null
+          ? "Estamos verificando a disponibilidade da fila. Tente novamente em instantes."
+          : "A fila pública não está disponível neste momento."
+      );
+      return;
+    }
+
     const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (!turnstileToken && !isLocalhost) {
       toast.error("Aguarde a validação de segurança...");
@@ -963,59 +980,55 @@ export default function QueueForm({
   return (
     <div className="w-full space-y-6">
 
-      {!isTerminalStatus(currentStatus) && (
-        <div className="flex flex-wrap items-center justify-center gap-6 sm:gap-8 py-4 border-b border-slate-100 mb-2">
-          <div className="flex flex-col items-center">
-            <Users className="text-blue-500 mb-1" size={24} />
-            <span className="font-black text-slate-800 text-lg">{waitingCount}</span>
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Na Fila</span>
+      {!isTerminalStatus(currentStatus) &&
+        !isActiveServiceStatus &&
+        (canShowPublicQueueMetrics || canShowPersonalWaitEstimate) && (
+          <div className="flex flex-wrap items-center justify-center gap-6 sm:gap-8 py-4 border-b border-slate-100 mb-2">
+            {canShowPublicQueueMetrics && (
+              <>
+                <div className="flex flex-col items-center">
+                  <Users className="text-blue-500 mb-1" size={24} />
+                  <span className="font-black text-slate-800 text-lg">{waitingCount}</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Na Fila</span>
+                </div>
+                <div className="w-px h-10 bg-slate-100" />
+              </>
+            )}
+
+            {canShowPersonalWaitEstimate && (
+              <div className="flex flex-col items-center">
+                <Clock className="text-amber-500 mb-1" size={24} />
+                <span className="font-black text-slate-800 text-lg">
+                  {estimatedWaitTime === null ? "—" : estimatedWaitTime}
+                  {estimatedWaitTime !== null && <span className="text-sm"> min</span>}
+                </span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                  {canShowPublicQueueMetrics ? "Espera Est." : "Sua espera Est."}
+                </span>
+              </div>
+            )}
+
+            {canShowPublicQueueMetrics && (
+              <>
+                <div className="w-px h-10 bg-slate-100" />
+                <div className="flex flex-col items-center">
+                  <Scissors className="text-emerald-500 mb-1" size={24} />
+                  <span className="font-black text-slate-800 text-lg">
+                    {eligibleBarberCount === null ? "—" : eligibleBarberCount}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                    Profissionais elegíveis
+                  </span>
+                </div>
+              </>
+            )}
           </div>
-
-          <div className="w-px h-10 bg-slate-100" />
-
-          <div className="flex flex-col items-center">
-            <Clock className="text-amber-500 mb-1" size={24} />
-            <span className="font-black text-slate-800 text-lg">
-              {publicAvailability && publicAvailability.status !== "available"
-                ? publicAvailability.status === "barbershop_closed"
-                  ? "Fechado"
-                  : publicAvailability.status === "professionals_off_shift"
-                    ? "Fora do horário"
-                    : publicAvailability.status === "queue_unavailable"
-                      ? "Indisponível"
-                      : "Sem horário"
-                : estimatedWaitTime === null
-                  ? "—"
-                  : estimatedWaitTime}
-              {(!publicAvailability || publicAvailability.status === "available") &&
-                estimatedWaitTime !== null && <span className="text-sm"> min</span>}
-            </span>
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-              {publicAvailability && publicAvailability.status !== "available"
-                ? "Situação"
-                : "Espera Est."}
-            </span>
-          </div>
-
-          <div className="w-px h-10 bg-slate-100" />
-
-          <div className="flex flex-col items-center">
-            <Scissors className="text-emerald-500 mb-1" size={24} />
-            <span className="font-black text-slate-800 text-lg">
-              {eligibleBarberCount === null ? "—" : eligibleBarberCount}
-            </span>
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-              {publicAvailability && publicAvailability.status !== "available"
-                ? "Profissionais na agenda"
-                : "Barbeiros"}
-            </span>
-          </div>
-        </div>
-      )}
+        )}
 
       {publicAvailability &&
         publicAvailability.status !== "available" &&
         !isTerminalStatus(currentStatus) &&
+        !isActiveServiceStatus &&
         !isScanning &&
         !showManualPin && (
           <div
@@ -1093,25 +1106,20 @@ export default function QueueForm({
                 </p>
               )}
 
-            {publicAvailability.nextAvailableAt &&
-              !scheduleTimesMatch(
-                publicAvailability.status === "barbershop_closed"
-                  ? publicAvailability.nextBusinessOpeningAt
-                  : null,
-                publicAvailability.nextAvailableAt
-              ) &&
-              publicAvailability.status !== "queue_unavailable" && (
-                <p
-                  className={cn(
-                    "mt-1 text-sm font-semibold",
-                    publicAvailability.status === "barbershop_closed"
-                      ? "text-amber-950"
-                      : "text-blue-950"
-                  )}
-                >
-                  Próximo atendimento disponível: {formatFriendlyScheduleDateTime(publicAvailability.nextAvailableAt)}.
-                </p>
-              )}
+
+          </div>
+        )}
+
+      {!publicAvailability &&
+        !inQueue &&
+        !isTerminalStatus(currentStatus) &&
+        !isScanning &&
+        !showManualPin && (
+          <div
+            role="status"
+            className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-sm font-medium text-slate-600"
+          >
+            Verificando a disponibilidade da fila...
           </div>
         )}
 
@@ -1128,7 +1136,7 @@ export default function QueueForm({
       {/* ========================================================= */}
       {/* TELA DE CHECK-IN / ENTRADA NA FILA                        */}
       {/* ========================================================= */}
-      {!inQueue && !isTerminalStatus(currentStatus) && (
+      {!inQueue && !isTerminalStatus(currentStatus) && canEnterPublicQueue && (
         <>
           {/* 1. SE FOR REMOTO (NÃO LOCAL): BLOQUEIA TUDO E EXIGE QR CODE */}
           {!isLocal ? (
@@ -1144,7 +1152,7 @@ export default function QueueForm({
                     <Camera className="mr-2" size={20} /> Ler QR Code da Recepção
                   </Button>
                   <button type="button" onClick={() => setShowManualPin(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-4 pt-2 pb-2 transition-colors">
-                    Ou Digite o Código PIN
+                    Câmera não funciona? Digitar código
                   </button>
 
                   {user ? (
@@ -1597,7 +1605,7 @@ export default function QueueForm({
                 </p>
               )}
 
-              {projectedBarberName && (
+              {canShowPublicQueueMetrics && projectedBarberName && (
                 <p className="text-xs text-slate-500 text-center">
                   Previsão de atendimento com{" "}
                   <span className="font-bold text-slate-700">

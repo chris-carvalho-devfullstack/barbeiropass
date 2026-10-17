@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { calculateSupabaseQueueWaitTimes } from "@/infrastructure/database/supabase/SupabaseQueueWaitTimeService";
 import { CustomerRepository } from "@/infrastructure/database/supabase/CustomerRepository";
 import { EventLogRepository } from "@/infrastructure/database/supabase/EventLogRepository";
 import { CustomerService } from "@/domain/customer/services/CustomerService";
@@ -92,6 +93,36 @@ export async function POST(request: Request) {
     const barbershop = await resolvePublicBarbershop(admin, slug);
     if (!barbershop) {
       return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
+    }
+
+    // Revalida a disponibilidade no servidor antes de aceitar uma nova entrada.
+    // A regra do cliente é apenas visual; esta verificação impede chamadas diretas à API.
+    const queueState = await calculateSupabaseQueueWaitTimes({
+      barbershopId: barbershop.id,
+      timeZone: "America/Sao_Paulo",
+      daysAhead: 14,
+      includePublicPreview: true,
+    });
+
+    const availabilityStatus = queueState.publicAvailability.status;
+
+    if (availabilityStatus !== "available") {
+      const availabilityMessage =
+        availabilityStatus === "barbershop_closed"
+          ? "A barbearia está fechada no momento e não está aceitando novas entradas."
+          : availabilityStatus === "professionals_off_shift"
+            ? "No momento, não há barbeiros disponíveis para novas entradas na fila."
+            : availabilityStatus === "queue_unavailable"
+              ? "A fila virtual não está aceitando novas entradas no momento."
+              : "Não há disponibilidade para novas entradas na fila no momento.";
+
+      return NextResponse.json(
+        {
+          error: availabilityMessage,
+          availabilityStatus,
+        },
+        { status: 409 }
+      );
     }
 
     if (barberId) {
