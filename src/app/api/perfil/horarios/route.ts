@@ -8,8 +8,14 @@ export const runtime = 'edge';
 const scheduleSchema = z.array(z.object({
   day_of_week: z.number().min(0).max(6),
   is_active: z.boolean(),
-  start_time: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, "Hora inválida"),
-  end_time: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, "Hora inválida"),
+  start_time: z
+    .string()
+    .transform((val) => val.slice(0, 5))
+    .refine((val) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(val), "Hora inválida"),
+  end_time: z
+    .string()
+    .transform((val) => val.slice(0, 5))
+    .refine((val) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(val), "Hora inválida"),
   service_mode: z.enum(['appointment', 'queue', 'hybrid']).default('appointment'),
 }));
 
@@ -19,7 +25,7 @@ export async function GET() {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
 
-    // Modificado: Procurar também o barbershop_id
+    // Procurar também o barbershop_id
     const { data: staff, error: staffError } = await supabase
       .from("staff")
       .select("id, barbershop_id")
@@ -28,14 +34,13 @@ export async function GET() {
 
     if (staffError || !staff) throw new Error("Perfil de profissional não encontrado.");
 
-    // NOVO: Procurar a configuração global da barbearia para o Walk-in
+    // Procurar a configuração global da barbearia para o Walk-in
     const { data: settings } = await supabase
       .from("barbershop_settings")
       .select("accepts_walk_in")
       .eq("barbershop_id", staff.barbershop_id)
       .single();
 
-    // Se for null, assumimos falso por segurança
     const acceptsWalkIn = settings?.accepts_walk_in ?? true; 
 
     const { data: horarios, error: horariosError } = await supabase
@@ -46,8 +51,15 @@ export async function GET() {
 
     if (horariosError) throw horariosError;
 
+    // Normaliza HH:MM:SS do Postgres para HH:MM antes de enviar ao frontend
+    const normalizedHorarios = (horarios || []).map((h) => ({
+      ...h,
+      start_time: h.start_time ? String(h.start_time).slice(0, 5) : "09:00",
+      end_time: h.end_time ? String(h.end_time).slice(0, 5) : "19:00",
+    }));
+
     // Retorna os horários e também a permissão global
-    return NextResponse.json({ data: horarios, acceptsWalkIn });
+    return NextResponse.json({ data: normalizedHorarios, acceptsWalkIn });
   } catch (error: unknown) {
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

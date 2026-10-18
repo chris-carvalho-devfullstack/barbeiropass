@@ -19,14 +19,14 @@ export function OnboardingProgress({ score, stepsCompleted }: OnboardingProgress
     {
       title: "Endereço",
       description: "Localização da sua barbearia",
-      href: "/perfil/endereco",
+      href: "/configuracoes/endereco",
       icon: MapPin,
       completed: stepsCompleted.hasAddress,
     },
     {
       title: "Horários",
       description: "Quando você está aberto",
-      href: "/perfil/horarios",
+      href: "/configuracoes/horarios",
       icon: Clock,
       completed: stepsCompleted.hasHours,
     },
@@ -40,7 +40,7 @@ export function OnboardingProgress({ score, stepsCompleted }: OnboardingProgress
     {
       title: "Aparência",
       description: "Fotos e descrição",
-      href: "/perfil/aparencia",
+      href: "/configuracoes/aparencia",
       icon: ImageIcon,
       completed: stepsCompleted.hasAppearance,
     },

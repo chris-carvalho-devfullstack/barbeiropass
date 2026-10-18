@@ -1,8 +1,9 @@
+// src/app/(dashboard)/configuracoes/aparencia/page.tsx
 "use client";
 
 import { useState, useEffect, ComponentPropsWithoutRef } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { updateAppearance, updateBarbershopSettings, BarbershopSettingsData } from "../../perfil/actions";
+import type { BarbershopSettingsData } from "../../perfil/actions";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { maskPhone } from "@/utils/validations"; 
 import { Loader2, Upload, Camera, Check, Phone } from "lucide-react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 
 // ============================================================================
 // ÍCONE CUSTOMIZADO (Tipado corretamente sem 'any')
@@ -52,6 +54,17 @@ interface AmenitiesTypes {
   kidsArea: boolean;
 }
 
+const DEFAULT_AMENITIES: AmenitiesTypes = {
+  parking: false,
+  wifi: false,
+  airConditioning: false,
+  accessibility: false,
+  beer: false,
+  videogame: false,
+  coffee: false,
+  kidsArea: false,
+};
+
 interface BarbershopData {
   id: string;
   name: string;
@@ -63,7 +76,7 @@ interface BarbershopData {
 }
 
 interface BarbershopSettingsResponse {
-  amenities: AmenitiesTypes | null;
+  amenities: Partial<AmenitiesTypes> | null;
   accepts_walk_in: boolean | null;
 }
 
@@ -77,16 +90,12 @@ interface MemberWithBarbershop {
 }
 
 export default function AparenciaPage() {
+  const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [barbershop, setBarbershop] = useState<BarbershopData | null>(null);
   
-  const [amenities, setAmenities] = useState<AmenitiesTypes>({
-    parking: false, wifi: false, airConditioning: false,
-    accessibility: false, beer: false, videogame: false,
-    coffee: false, kidsArea: false
-  });
-
+  const [amenities, setAmenities] = useState<AmenitiesTypes>(DEFAULT_AMENITIES);
   const [acceptsWalkIn, setAcceptsWalkIn] = useState(true);
 
   useEffect(() => {
@@ -107,9 +116,9 @@ export default function AparenciaPage() {
         setBarbershop({
           id: bs.id,
           name: bs.name,
-          description: bs.description,
-          phone: bs.phone,
-          instagram: bs.instagram,
+          description: bs.description || "",
+          phone: bs.phone ? maskPhone(bs.phone) : "",
+          instagram: bs.instagram || "",
           logo_url: bs.logo_url,
           banner_url: bs.banner_url,
         });
@@ -117,8 +126,18 @@ export default function AparenciaPage() {
         const settingsData = bs.barbershop_settings;
         const settings = Array.isArray(settingsData) ? settingsData[0] : settingsData;
         
-        if (settings?.amenities) {
-          setAmenities(settings.amenities);
+        // Merge seguro para nunca perder nenhuma das 8 chaves booleanas
+        if (settings?.amenities && typeof settings.amenities === "object") {
+          setAmenities({
+            parking: Boolean(settings.amenities.parking),
+            wifi: Boolean(settings.amenities.wifi),
+            airConditioning: Boolean(settings.amenities.airConditioning),
+            accessibility: Boolean(settings.amenities.accessibility),
+            beer: Boolean(settings.amenities.beer),
+            videogame: Boolean(settings.amenities.videogame),
+            coffee: Boolean(settings.amenities.coffee),
+            kidsArea: Boolean(settings.amenities.kidsArea),
+          });
         }
 
         setAcceptsWalkIn(settings?.accepts_walk_in ?? true);
@@ -168,7 +187,12 @@ export default function AparenciaPage() {
       const finalUrl = `${urlData.publicUrl}?t=${Date.now()}`;
 
       const updateData = type === 'logo' ? { logo_url: finalUrl } : { banner_url: finalUrl };
-      await supabase.from('barbershops').update(updateData).eq('id', barbershop.id);
+      const { error: dbError } = await supabase
+        .from('barbershops')
+        .update(updateData)
+        .eq('id', barbershop.id);
+
+      if (dbError) throw dbError;
       
       setBarbershop(prev => prev ? { ...prev, ...updateData } : null);
       toast.success("Imagem atualizada!", { id: toastId });
@@ -182,32 +206,49 @@ export default function AparenciaPage() {
   const onSaveAll = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
-    const formData = new FormData(e.currentTarget);
 
-    const appearance = {
-      description: (formData.get("description") as string) || "",
-      phone: (formData.get("phone") as string) || "",
-      instagram: (formData.get("instagram") as string) || "",
-    };
+    try {
+      const formData = new FormData(e.currentTarget);
 
-    const settings: BarbershopSettingsData = {
-      styles: ["Moderna", "Urbana"], 
-      target_audience: ["Masculino"],
-      amenities: amenities,
-      accepts_walk_in: acceptsWalkIn,
-    };
+      const appearance = {
+        description: String(formData.get("description") || "").trim(),
+        phone: String(formData.get("phone") || "").trim(),
+        instagram: String(formData.get("instagram") || "").trim(),
+      };
 
-    const [res1, res2] = await Promise.all([
-      updateAppearance(appearance),
-      updateBarbershopSettings(settings)
-    ]);
+      const settings: BarbershopSettingsData = {
+        styles: ["Moderna", "Urbana"], 
+        target_audience: ["Masculino"],
+        amenities: {
+          ...DEFAULT_AMENITIES,
+          ...amenities,
+        },
+        accepts_walk_in: Boolean(acceptsWalkIn),
+      };
 
-    if (res1.error || res2.error) {
-      toast.error("Erro ao salvar as configurações.");
-    } else {
-      toast.success("Perfil atualizado com sucesso!");
+      const response = await fetch("/api/configuracoes/aparencia", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ appearance, settings }),
+      });
+
+      const res = await response.json().catch(() => null);
+
+      if (!response.ok || res?.error) {
+        console.error("Erro retornado ao salvar aparência:", res);
+        toast.error(res?.error || "Erro ao salvar as configurações.");
+      } else {
+        toast.success("Perfil atualizado com sucesso!");
+        router.refresh();
+      }
+    } catch (error) {
+      console.error("Erro inesperado de rede ao salvar aparência:", error);
+      toast.error("Erro de conexão ao salvar as configurações.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   if (!barbershop) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin text-zinc-500" /></div>;
@@ -237,7 +278,7 @@ export default function AparenciaPage() {
               </div>
             )}
             
-            <label className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300">
+            <label className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
               <div className="flex flex-col items-center text-white text-sm font-semibold">
                 <Camera size={24} />
                 <span className="mt-2">Alterar Banner</span>
@@ -303,7 +344,6 @@ export default function AparenciaPage() {
                       name="phone" 
                       defaultValue={barbershop.phone || ""} 
                       placeholder="(00) 00000-0000" 
-                      // 👇 ADICIONE O EVENTO ONCHANGE AQUI
                       onChange={(e) => { e.target.value = maskPhone(e.target.value); }}
                       className="focus:ring-zinc-900" 
                     />

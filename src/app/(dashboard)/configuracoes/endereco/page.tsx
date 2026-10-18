@@ -1,10 +1,10 @@
+// src/app/(dashboard)/configuracoes/endereco/page.tsx
 "use client";
 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { MapPin, Loader2, Search } from "lucide-react";
-import { updateLocation } from "../../perfil/actions";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
@@ -144,22 +144,28 @@ export default function EnderecoPage() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      // Erro TS corrigido: Garantimos que complement seja uma string ("") caso seja undefined
-      const response = await updateLocation({
-        ...data,
-        complement: data.complement || "",
+      const res = await fetch("/api/configuracoes/endereco", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...data,
+          complement: data.complement || "",
+        }),
       });
+
+      const response = await res.json().catch(() => null);
       
-      if (response?.error) {
-        toast.error(`Erro: ${response.error}`); 
+      if (!res.ok || response?.error) {
+        toast.error(`Erro: ${response?.error || "Falha ao salvar endereço."}`); 
         return;
       }
 
       toast.success("Endereço salvo e sincronizado com sucesso!");
-      router.push("/dashboard");
       router.refresh();
+      router.push("/dashboard");
     } catch {
-      // Erro TS corrigido: removido o (error) pois não estava sendo usado
       toast.error("Ocorreu um erro inesperado ao salvar o endereço.");
     }
   };
