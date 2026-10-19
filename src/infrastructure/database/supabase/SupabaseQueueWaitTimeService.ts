@@ -22,6 +22,13 @@ const MAX_QUEUE_DURATION_MINUTES = 480;
 const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
 const PUBLIC_PREVIEW_TICKET_ID = "__public_queue_preview__";
 
+type QueueAcceptancePolicy =
+  | "accept_until_closing"
+  | "restrict_by_capacity";
+
+const DEFAULT_QUEUE_ACCEPTANCE_POLICY: QueueAcceptancePolicy =
+  "restrict_by_capacity";
+
 const ACTIVE_QUEUE_STATUSES = [
   "waiting",
   "in_progress",
@@ -65,6 +72,7 @@ interface QueueTicketRow {
 interface BarbershopSettingsRow {
   accepts_walk_in: boolean | null;
   default_queue_duration_minutes: number | null;
+  queue_acceptance_policy: string | null;
 }
 
 interface BusinessHoursRow {
@@ -164,6 +172,55 @@ function normalizeTicketDuration(
   return defaultDuration;
 }
 
+function normalizeQueueAcceptancePolicy(
+  value: string | null | undefined
+): QueueAcceptancePolicy {
+  if (value === "accept_until_closing") {
+    return "accept_until_closing";
+  }
+
+  if (value === "restrict_by_capacity") {
+    return "restrict_by_capacity";
+  }
+
+  // Em caso de valor ausente ou desconhecido, adotamos a política
+  // conservadora para não permitir entradas além da capacidade atual.
+  return DEFAULT_QUEUE_ACCEPTANCE_POLICY;
+}
+
+function getLocalDateKeyInTimeZone(
+  value: Date | string,
+  timeZone: string
+): string {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error(
+      "[SupabaseQueueWaitTimeService] Data inválida ao comparar o dia local."
+    );
+  }
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  const year = values.get("year");
+  const month = values.get("month");
+  const day = values.get("day");
+
+  if (!year || !month || !day) {
+    throw new Error(
+      "[SupabaseQueueWaitTimeService] Não foi possível determinar o dia local."
+    );
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
 /**
  * Carrega os dados reais da fila e calcula as previsões.
  *
@@ -226,7 +283,9 @@ export async function calculateSupabaseQueueWaitTimes(
   const [settingsResult, ticketsResult, businessHoursResult] = await Promise.all([
     admin
       .from("barbershop_settings")
-      .select("accepts_walk_in, default_queue_duration_minutes")
+      .select(
+        "accepts_walk_in, default_queue_duration_minutes, queue_acceptance_policy"
+      )
       .eq("barbershop_id", barbershopId)
       .maybeSingle(),
 
@@ -316,6 +375,12 @@ export async function calculateSupabaseQueueWaitTimes(
   // se a configuração global não existir, assume true.
   const barbershopAcceptsQueue =
     settings?.accepts_walk_in ?? true;
+
+  const queueAcceptancePolicy = normalizeQueueAcceptancePolicy(
+    settings?.queue_acceptance_policy
+  );
+  const allowQueueToContinueAfterClosing =
+    queueAcceptancePolicy === "accept_until_closing";
 
   // 3. Busca expediente semanal e bloqueios.
   let workingHoursRows: WorkingHourRow[] = [];
@@ -441,6 +506,7 @@ export async function calculateSupabaseQueueWaitTimes(
     barbershopAcceptsQueue,
     barbers: barberSources,
     minimumServiceDurationMinutes: defaultQueueDurationMinutes,
+    allowQueueToContinueAfterClosing,
     // Só aplicamos a restrição geral se houver horários persistidos.
     // Isso mantém compatibilidade com barbearias ainda sem configuração.
     business_hours: businessHours.length > 0 ? businessHours : undefined,
@@ -488,6 +554,7 @@ export async function calculateSupabaseQueueWaitTimes(
     barbershopAcceptsQueue,
     barbers: availability.barbers,
     tickets: queueTickets,
+    allowQueueToContinueAfterClosing,
 
     previewTicket: includePublicPreview
       ? {
@@ -525,7 +592,15 @@ export async function calculateSupabaseQueueWaitTimes(
   const scheduleStatus = availability.scheduleStatus;
   let publicAvailabilityStatus: PublicQueueAvailabilityStatusCode;
 
+  const previewStartsOnAnotherLocalDay = Boolean(
+    previewEstimate?.estimatedStartAt &&
+      getLocalDateKeyInTimeZone(previewEstimate.estimatedStartAt, timeZone) !==
+        getLocalDateKeyInTimeZone(nowDate, timeZone)
+  );
+
   // A situação da barbearia tem prioridade sobre o horário da equipe.
+  // Na política restritiva, uma entrada pública só é aceita quando a
+  // previsão consegue começar no mesmo dia, dentro da capacidade atual.
   if (
     scheduleStatus.businessHoursConfigured &&
     scheduleStatus.businessOpenNow === false
@@ -533,6 +608,12 @@ export async function calculateSupabaseQueueWaitTimes(
     publicAvailabilityStatus = "barbershop_closed";
   } else if (!barbershopAcceptsQueue) {
     publicAvailabilityStatus = "queue_unavailable";
+  } else if (
+    includePublicPreview &&
+    queueAcceptancePolicy === "restrict_by_capacity" &&
+    (!previewEstimate?.estimatedStartAt || previewStartsOnAnotherLocalDay)
+  ) {
+    publicAvailabilityStatus = "no_availability";
   } else if (scheduleStatus.professionalsAvailableNow === 0) {
     publicAvailabilityStatus = previewEstimate?.estimatedStartAt
       ? "professionals_off_shift"

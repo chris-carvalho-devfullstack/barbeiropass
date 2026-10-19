@@ -37,6 +37,16 @@ export interface QueueAvailabilityWindow {
    * Fim do intervalo em ISO 8601 com timezone.
    */
   endAt: string;
+
+  /**
+   * Quando true, indica que este é o fim da última janela de disponibilidade
+   * do dia e que, se a política permitir, os atendimentos já aceitos na fila
+   * podem continuar sendo projetados depois deste horário.
+   *
+   * Esta marcação não permite ignorar pausas intermediárias; deve ser aplicada
+   * pelo backend somente à última janela efetivamente disponível do dia.
+   */
+  allowQueueToContinueAfterWindow?: boolean;
 }
 
 export interface QueueBarberInput {
@@ -119,6 +129,17 @@ export interface QueueWaitTimeEstimatorInput {
    * independentemente do valor de joinedAt.
    */
   previewTicket?: QueueTicketInput | null;
+
+  /**
+   * Quando true, permite que a projeção dos atendimentos que já estão na fila
+   * continue depois do encerramento, usando a última janela diária marcada
+   * com allowQueueToContinueAfterWindow.
+   *
+   * Esta opção não altera a decisão de aceitar novas entradas; essa decisão
+   * continua sendo responsabilidade da camada de disponibilidade/API.
+   * Por padrão, false mantém a regra restritiva atual.
+   */
+  allowQueueToContinueAfterClosing?: boolean;
 }
 
 export interface ActiveServiceEstimate {
@@ -228,6 +249,7 @@ export interface QueueWaitTimeEstimatorResult {
 interface NormalizedWindow {
   startMs: number;
   endMs: number;
+  allowQueueToContinueAfterWindow?: boolean;
 }
 
 interface BarberTimeline {
@@ -336,7 +358,12 @@ function normalizeWindows(
       );
     }
 
-    return { startMs, endMs };
+    return {
+      startMs,
+      endMs,
+      allowQueueToContinueAfterWindow:
+        window.allowQueueToContinueAfterWindow === true,
+    };
   });
 
   parsed.sort((a, b) => a.startMs - b.startMs);
@@ -355,10 +382,17 @@ function normalizeWindows(
       continue;
     }
 
-    last.endMs = Math.max(
-      last.endMs,
-      window.endMs
-    );
+    // Ao unir intervalos sobrepostos, mantemos a permissão de continuidade
+    // somente se ela estiver presente no intervalo que define o fim resultante.
+    if (window.endMs > last.endMs) {
+      last.endMs = window.endMs;
+      last.allowQueueToContinueAfterWindow =
+        window.allowQueueToContinueAfterWindow === true;
+    } else if (window.endMs === last.endMs) {
+      last.allowQueueToContinueAfterWindow =
+        last.allowQueueToContinueAfterWindow === true ||
+        window.allowQueueToContinueAfterWindow === true;
+    }
   }
 
   return merged;
@@ -367,12 +401,24 @@ function normalizeWindows(
 function findEarliestStart(
   timeline: BarberTimeline,
   earliestMs: number,
-  durationMinutes: number
+  durationMinutes: number,
+  allowQueueToContinueAfterClosing: boolean
 ): number | null {
   const durationMs = durationMinutes * MINUTE_MS;
 
   for (const window of timeline.windows) {
+    const canContinueAfterWindow =
+      allowQueueToContinueAfterClosing &&
+      window.allowQueueToContinueAfterWindow === true;
+
     if (window.endMs <= earliestMs) {
+      // Uma vez alcançado o fim da última janela diária marcada, a fila
+      // já admitida pode continuar sequencialmente após o fechamento.
+      // A política restritiva não entra neste caminho.
+      if (canContinueAfterWindow) {
+        return earliestMs;
+      }
+
       continue;
     }
 
@@ -385,16 +431,17 @@ function findEarliestStart(
       candidateStartMs + durationMs;
 
     /**
-     * Não inicia um novo serviço se ele ultrapassar
-     * o intervalo disponível.
-     *
-     * Isso impede, por exemplo, projetar um corte às 11:50
-     * quando o expediente termina às 12:00 e o serviço
-     * dura 30 minutos.
+     * No modo restritivo, o atendimento precisa caber integralmente
+     * no intervalo disponível. No modo de continuidade, somente a última
+     * janela diária marcada pelo backend pode permitir que o atendimento
+     * ultrapasse seu fim; pausas intermediárias continuam sendo respeitadas.
      */
     if (
       candidateStartMs < window.endMs &&
-      candidateFinishMs <= window.endMs
+      (
+        canContinueAfterWindow ||
+        candidateFinishMs <= window.endMs
+      )
     ) {
       return candidateStartMs;
     }
@@ -715,7 +762,8 @@ export function estimateQueueWaitTimes(
         ? findEarliestStart(
             preferredTimeline,
             preferredTimeline.nextAvailableAtMs,
-            duration
+            duration,
+            input.allowQueueToContinueAfterClosing ?? false
           )
         : null;
 
@@ -739,7 +787,8 @@ export function estimateQueueWaitTimes(
       const startMs = findEarliestStart(
         timeline,
         timeline.nextAvailableAtMs,
-        duration
+        duration,
+        input.allowQueueToContinueAfterClosing ?? false
       );
 
       if (startMs === null) {

@@ -60,6 +60,15 @@ export interface QueueAvailabilityServiceInput {
   /** Duração mínima para aceitar um novo atendimento neste momento. */
   minimumServiceDurationMinutes?: number;
   /**
+   * Quando true, permite que a sequência da fila continue após o fim
+   * da última janela diária de disponibilidade. A aceitação de novos
+   * clientes continua limitada à janela de expediente vigente.
+   *
+   * Por padrão, false mantém a regra restritiva atual: o atendimento
+   * precisa caber integralmente na janela disponível.
+   */
+  allowQueueToContinueAfterClosing?: boolean;
+  /**
    * Expediente geral do estabelecimento. Quando informado, a
    * disponibilidade individual de cada profissional será limitada
    * à interseção com estes horários. Um array vazio mantém o
@@ -481,7 +490,8 @@ function buildBarberAvailabilityWindows(
   daysAhead: number,
   formatter: Intl.DateTimeFormat,
   timeZone: string,
-  businessHoursByDay: Map<number, QueueBusinessHourInput> | null
+  businessHoursByDay: Map<number, QueueBusinessHourInput> | null,
+  allowQueueToContinueAfterClosing: boolean
 ): QueueAvailabilityWindow[] {
   const scheduleByDay = new Map<number, QueueWorkingHourInput>();
 
@@ -628,10 +638,25 @@ function buildBarberAvailabilityWindows(
     }
 
     for (const interval of availableIntervals) {
-      windows.push({
+      const availabilityWindow: QueueAvailabilityWindow & {
+        allowQueueToContinueAfterWindow?: boolean;
+      } = {
         startAt: new Date(interval.startMs).toISOString(),
         endAt: new Date(interval.endMs).toISOString(),
-      });
+      };
+
+      // Somente a última janela efetivamente disponível do dia pode
+      // carregar esta permissão. Assim, a sequência da fila pode avançar
+      // depois do fechamento, mas bloqueios intermediários (por exemplo,
+      // almoço) continuam sendo respeitados pelo estimador.
+      if (
+        allowQueueToContinueAfterClosing &&
+        interval.endMs === effectiveEndMs
+      ) {
+        availabilityWindow.allowQueueToContinueAfterWindow = true;
+      }
+
+      windows.push(availabilityWindow);
     }
   }
 
@@ -748,7 +773,8 @@ export function buildQueueAvailability(
       daysAhead,
       formatter,
       input.timeZone,
-      businessHoursByDay
+      businessHoursByDay,
+      input.allowQueueToContinueAfterClosing ?? false
     );
 
     const serviceMode: QueueServiceMode =
@@ -767,6 +793,9 @@ export function buildQueueAvailability(
   const minimumServiceDurationMs =
     minimumServiceDurationMinutes * 60_000;
 
+  const allowQueueToContinueAfterClosing =
+    input.allowQueueToContinueAfterClosing ?? false;
+
   const professionalsAvailableNow = barbers.filter((barber) => {
     if (
       !input.barbershopAcceptsQueue ||
@@ -780,6 +809,15 @@ export function buildQueueAvailability(
     return barber.availabilityWindows.some((window) => {
       const startMs = Date.parse(window.startAt);
       const endMs = Date.parse(window.endAt);
+
+      if (allowQueueToContinueAfterClosing) {
+        // Para a política de aceitação até o fechamento, basta que o
+        // profissional esteja dentro de sua janela agora. A duração do
+        // atendimento não antecipa o bloqueio da entrada de novos clientes.
+        return startMs <= nowMs && nowMs < endMs;
+      }
+
+      // Política restritiva: o atendimento completo precisa caber na janela.
       return startMs <= nowMs && nowMs + minimumServiceDurationMs <= endMs;
     });
   }).length;

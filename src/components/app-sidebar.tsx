@@ -9,7 +9,7 @@ import {
   LayoutDashboard,
   Package,
   Calendar,
-  ListOrdered, 
+  ListOrdered,
   Calculator,
   IdCard,
   User,
@@ -18,7 +18,7 @@ import {
   MapPin,
   Palette,
   CalendarClock,
-  Building2
+  Building2,
 } from "lucide-react";
 
 import {
@@ -41,6 +41,7 @@ const mainItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "PDV", url: "/pdv", icon: Calculator },
   { title: "Fila Virtual", url: "/fila", icon: ListOrdered },
+  { title: "Métricas da Fila", url: "/fila/metricas", icon: Clock },
   { title: "Agenda", url: "/agendamentos", icon: Calendar },
   { title: "Serviços", url: "/servicos", icon: Scissors },
   { title: "Produtos", url: "/produtos", icon: Package },
@@ -52,7 +53,11 @@ const mainItems = [
 // 2. Grupo de Configurações da Barbearia (Global - RBAC)
 const configItems = [
   { title: "Dados Gerais", url: "/configuracoes", icon: Building2 },
-  { title: "Expediente da Loja", url: "/configuracoes/horarios", icon: Clock },
+  {
+    title: "Expediente da Loja",
+    url: "/configuracoes/horarios",
+    icon: Clock,
+  },
   { title: "Endereço", url: "/configuracoes/endereco", icon: MapPin },
   { title: "Aparência", url: "/configuracoes/aparencia", icon: Palette },
 ];
@@ -66,7 +71,7 @@ const profileItems = [
 
 export function AppSidebar() {
   const [mounted, setMounted] = React.useState(false);
-  
+
   const { state, isMobile, setOpenMobile } = useSidebar();
 
   React.useEffect(() => {
@@ -83,13 +88,13 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader 
+      <SidebarHeader
         className={`flex h-16 items-center border-b transition-all ${
           state === "expanded" ? "px-4" : "justify-center px-0"
         }`}
       >
         {state === "expanded" ? (
-          <span className="font-bold text-lg tracking-tight whitespace-nowrap">
+          <span className="whitespace-nowrap text-lg font-bold tracking-tight">
             Barbeiro<span className="text-zinc-500">Pass</span>
           </span>
         ) : (
@@ -99,7 +104,6 @@ export function AppSidebar() {
 
       <TooltipProvider delayDuration={0}>
         <SidebarContent className="gap-0">
-          
           {/* SEÇÃO 1: OPERACIONAL */}
           <SidebarGroup>
             <SidebarGroupLabel>Gestão</SidebarGroupLabel>
@@ -156,9 +160,9 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-
         </SidebarContent>
       </TooltipProvider>
+
       <SidebarRail />
     </Sidebar>
   );

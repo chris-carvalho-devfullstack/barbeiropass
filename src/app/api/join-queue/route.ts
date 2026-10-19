@@ -1,5 +1,5 @@
 // src/app/api/join-queue/route.ts
-export const runtime = 'edge'; 
+export const runtime = 'edge';
 
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
@@ -10,6 +10,10 @@ import { CustomerService } from '@/domain/customer/services/CustomerService';
 import { EventLogRepository } from '@/infrastructure/database/supabase/EventLogRepository';
 import { EventLogService } from '@/domain/shared/services/EventLogService';
 import { TenantContext } from '@/domain/shared/TenantContext';
+import {
+  calculateSupabaseQueueWaitTimes,
+  type PublicQueueAvailabilityStatusCode,
+} from "@/infrastructure/database/supabase/SupabaseQueueWaitTimeService";
 
 // 1. ZOD SCHEMA RIGOROSO
 const joinQueueSchema = z.object({
@@ -22,10 +26,27 @@ const joinQueueSchema = z.object({
   cpf: z.string().optional().nullable(),
 });
 
+function getPublicQueueUnavailableMessage(
+  status: Exclude<PublicQueueAvailabilityStatusCode, "available">
+): string {
+  switch (status) {
+    case "barbershop_closed":
+      return "A fila pública está fechada no momento. Tente novamente durante o horário de funcionamento.";
+    case "professionals_off_shift":
+      return "No momento, não há profissionais em expediente disponíveis para receber novos clientes.";
+    case "queue_unavailable":
+      return "A fila pública está desativada pela barbearia.";
+    case "no_availability":
+      return "A fila não pode aceitar novas entradas neste momento.";
+  }
+
+  return "A fila pública não está disponível para novas entradas neste momento.";
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    
+
     const parsed = joinQueueSchema.safeParse(body);
     if (!parsed.success) {
       console.error("Tentativa de manipulação de payload (Zod):", parsed.error.flatten());
@@ -36,7 +57,7 @@ export async function POST(req: Request) {
 
     // 2. VALIDAÇÃO TURNSTILE COM BYPASS PARA LOCALHOST
     const isDevelopment = process.env.NODE_ENV === 'development';
-    
+
     if (!isDevelopment && turnstileToken !== "bypass_for_localhost") {
       const secretKey = process.env.TURNSTILE_SECRET_KEY;
       if (!secretKey) {
@@ -51,11 +72,11 @@ export async function POST(req: Request) {
       const turnstileRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData.toString(), 
+        body: formData.toString(),
       });
-      
+
       const turnstileData = await turnstileRes.json();
-      
+
       if (!turnstileData.success) {
         console.error("Cloudflare bloqueou o acesso. Códigos:", turnstileData["error-codes"]);
         return NextResponse.json({ error: "Falha na verificação de segurança (Anti-Bot)." }, { status: 403 });
@@ -65,7 +86,7 @@ export async function POST(req: Request) {
     // 3. IDENTIFICAÇÃO DO USUÁRIO
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     if (!user && !clientName) {
       return NextResponse.json({ error: "Para entrar na fila sem conta, é obrigatório informar o seu nome." }, { status: 401 });
     }
@@ -92,10 +113,43 @@ export async function POST(req: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // 5. INTEGRAÇÃO COM O NOVO CRM (Smart Merge usando Admin Client)
+    // 5. VALIDAÇÃO DA POLÍTICA DE ACEITAÇÃO DA FILA PÚBLICA
+    // Esta rota representa a entrada pública de clientes. A verificação é
+    // feita antes de criar/atualizar o cliente no CRM, para não gerar registros
+    // de clientes quando a fila não pode aceitar a entrada.
+    // A política "accept_until_closing" permite projetar a fila para além do
+    // fechamento, mas a barbearia e os profissionais elegíveis precisam estar
+    // disponíveis no momento da entrada. A política restritiva também exige
+    // capacidade no expediente atual, conforme calculado pelo serviço.
+    const queueWaitTimeResult = await calculateSupabaseQueueWaitTimes({
+      barbershopId,
+      includePublicPreview: true,
+    });
+
+    const publicAvailability = queueWaitTimeResult.publicAvailability;
+
+    if (publicAvailability.status !== "available") {
+      const status = publicAvailability.status;
+      const httpStatus = status === "queue_unavailable" ? 403 : 409;
+
+      return NextResponse.json(
+        {
+          error: getPublicQueueUnavailableMessage(status),
+          code: status,
+          availability: {
+            nextBusinessOpeningAt: publicAvailability.nextBusinessOpeningAt,
+            businessClosesAt: publicAvailability.businessClosesAt,
+            nextAvailableAt: publicAvailability.nextAvailableAt,
+          },
+        },
+        { status: httpStatus }
+      );
+    }
+
+    // 6. INTEGRAÇÃO COM O NOVO CRM (Smart Merge usando Admin Client)
     const context = {
       tenantId: barbershopId,
-      userId: user?.id || null, 
+      userId: user?.id || null,
       role: "receptionist" as const,
     } as unknown as TenantContext;
 
@@ -118,7 +172,7 @@ export async function POST(req: Request) {
       createdFrom: "QUEUE",
     });
 
-    // 6. PREVENÇÃO DE DUPLICATAS NA FILA VIRTUAL
+    // 7. PREVENÇÃO DE DUPLICATAS NA FILA VIRTUAL
     let queueQuery = supabaseAdmin
       .from("virtual_queue")
       .select("id")
@@ -146,7 +200,7 @@ export async function POST(req: Request) {
     };
     const safePublicName = formatPublicName(customer.name);
 
-    // 7. INSERÇÃO NA TABELA DE FILA VIRTUAL COM RETORNO DO ID DA FILA
+    // 8. INSERÇÃO NA TABELA DE FILA VIRTUAL COM RETORNO DO ID DA FILA
     const { data: insertedQueue, error: insertError } = await supabaseAdmin
       .from("virtual_queue")
       .insert({
@@ -166,12 +220,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Erro ao registar a sua posição na fila." }, { status: 500 });
     }
 
-    // 8. AUDITORIA E TIMELINE
+    // 9. AUDITORIA E TIMELINE
     await eventService.logEvent(context, {
       entityType: 'QUEUE',
       entityId: customer.id,
       eventType: 'QUEUE_ENTERED',
-      payload: { 
+      payload: {
         barberId: barberId || "Sem Preferência",
         isAuthenticated: !!user,
         source: "VIRTUAL_QUEUE_PUBLIC_LINK",

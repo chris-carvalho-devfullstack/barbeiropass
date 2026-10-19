@@ -190,11 +190,12 @@ export default function QueueForm({
   const [supabase] = useState(() => createClient());
 
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "Cliente";
-  // Usa o cálculo real da API após a primeira resposta; antes disso,
-  // mantém uma estimativa provisória para evitar um espaço vazio na interface.
+  // Exibe apenas a previsão enviada pelo estimador do servidor.
+  // Não usa waitingCount * 20, pois esse cálculo ignora a duração
+  // configurada, atendimentos em andamento e horários disponíveis.
   const estimatedWaitTime = queueEstimateReceived
     ? estimatedWaitMinutes
-    : waitingCount * 20;
+    : null;
   const isActiveServiceStatus =
     currentStatus === "in_progress" || currentStatus === "in_chair";
   const canShowPublicQueueMetrics = publicAvailability?.status === "available";
