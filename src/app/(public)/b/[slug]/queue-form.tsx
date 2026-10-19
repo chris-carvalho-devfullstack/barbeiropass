@@ -198,7 +198,13 @@ export default function QueueForm({
     : null;
   const isActiveServiceStatus =
     currentStatus === "in_progress" || currentStatus === "in_chair";
-  const canShowPublicQueueMetrics = publicAvailability?.status === "available";
+  const isBeforeJoiningQueue =
+    !inQueue &&
+    !isTerminalStatus(currentStatus) &&
+    !isActiveServiceStatus;
+  const canShowPublicQueueMetrics =
+    publicAvailability?.status === "available" ||
+    (isBeforeJoiningQueue && publicAvailability !== null);
   const canShowPersonalWaitEstimate =
     canShowPublicQueueMetrics ||
     (inQueue && currentStatus === "waiting" && queueEstimateReceived);
@@ -1028,6 +1034,7 @@ export default function QueueForm({
 
       {publicAvailability &&
         publicAvailability.status !== "available" &&
+        !inQueue &&
         !isTerminalStatus(currentStatus) &&
         !isActiveServiceStatus &&
         !isScanning &&
