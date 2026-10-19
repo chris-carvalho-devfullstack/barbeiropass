@@ -1,6 +1,7 @@
 // src/app/api/perfil/horarios/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 import { z } from "zod";
 
 export const runtime = 'edge';
@@ -19,6 +20,10 @@ const scheduleSchema = z.array(z.object({
   service_mode: z.enum(['appointment', 'queue', 'hybrid']).default('appointment'),
 }));
 
+const queueAvailabilitySchema = z.object({
+  accepting_queue: z.boolean(),
+});
+
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -28,7 +33,7 @@ export async function GET() {
     // Procurar também o barbershop_id
     const { data: staff, error: staffError } = await supabase
       .from("staff")
-      .select("id, barbershop_id")
+      .select("id, barbershop_id, accepting_queue")
       .eq("profile_id", user.id)
       .single();
 
@@ -59,10 +64,77 @@ export async function GET() {
     }));
 
     // Retorna os horários e também a permissão global
-    return NextResponse.json({ data: normalizedHorarios, acceptsWalkIn });
+    return NextResponse.json({
+      data: normalizedHorarios,
+      acceptsWalkIn,
+      acceptingQueue: staff.accepting_queue ?? true,
+    });
   } catch (error: unknown) {
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: "Erro interno no servidor" }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+    }
+
+    const body = await request.json().catch(() => null);
+    const validation = queueAvailabilitySchema.safeParse(body);
+
+    if (!validation.success) {
+      return NextResponse.json({ error: "Dados de disponibilidade inválidos." }, { status: 400 });
+    }
+
+    // A conta autenticada determina qual registro pode ser alterado.
+    // O cliente administrativo evita depender de uma política RLS de UPDATE
+    // sobre staff; a autorização é validada antes de usar o cliente admin.
+    const admin = createAdminClient();
+    const { data: staff, error: staffError } = await admin
+      .from("staff")
+      .select("id, role")
+      .eq("profile_id", user.id)
+      .single();
+
+    if (staffError || !staff) {
+      return NextResponse.json({ error: "Perfil de profissional não encontrado." }, { status: 404 });
+    }
+
+    if (staff.role !== "barber") {
+      return NextResponse.json({ error: "Somente barbeiros podem alterar sua disponibilidade na fila." }, { status: 403 });
+    }
+
+    const { data: updatedStaff, error: updateError } = await admin
+      .from("staff")
+      .update({ accepting_queue: validation.data.accepting_queue })
+      .eq("id", staff.id)
+      .eq("profile_id", user.id)
+      .eq("role", "barber")
+      .select("accepting_queue")
+      .single();
+
+    if (updateError || !updatedStaff) {
+      console.error("Erro ao atualizar disponibilidade na fila:", updateError);
+      return NextResponse.json({ error: "Não foi possível atualizar a disponibilidade na fila." }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      acceptingQueue: updatedStaff.accepting_queue ?? true,
+      message: updatedStaff.accepting_queue
+        ? "Disponibilidade para novos atendimentos ativada."
+        : "Novos atendimentos pausados.",
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      console.error("Erro ao alterar disponibilidade na fila:", error);
+      return NextResponse.json({ error: "Erro interno ao atualizar a disponibilidade." }, { status: 500 });
     }
     return NextResponse.json({ error: "Erro interno no servidor" }, { status: 500 });
   }

@@ -79,6 +79,8 @@ export default function MeusHorariosPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [barbershopAcceptsWalkIn, setBarbershopAcceptsWalkIn] = useState(true);
+  const [acceptingQueue, setAcceptingQueue] = useState(true);
+  const [isSavingQueueAvailability, setIsSavingQueueAvailability] = useState(false);
 
   // Estados dos Bloqueios
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
@@ -127,6 +129,9 @@ export default function MeusHorariosPage() {
         if (jsonSchedule.acceptsWalkIn !== undefined) {
           setBarbershopAcceptsWalkIn(jsonSchedule.acceptsWalkIn);
         }
+        if (typeof jsonSchedule.acceptingQueue === "boolean") {
+          setAcceptingQueue(jsonSchedule.acceptingQueue);
+        }
         
         if (resSchedule.ok && jsonSchedule.data && Array.isArray(jsonSchedule.data) && jsonSchedule.data.length > 0) {
           const merged = defaultSchedule.map(defaultDay => {
@@ -173,6 +178,47 @@ export default function MeusHorariosPage() {
       }
     } catch (error) {
       console.error("Erro ao carregar bloqueios", error);
+    }
+  }
+
+  // Atualizar disponibilidade individual para novos atendimentos na fila
+  async function handleToggleQueueAvailability() {
+    if (!barbershopAcceptsWalkIn) {
+      toast.error("A fila virtual está desativada nas configurações da barbearia.");
+      return;
+    }
+
+    setIsSavingQueueAvailability(true);
+    const toastId = toast.loading("Atualizando disponibilidade...");
+    const nextAcceptingQueue = !acceptingQueue;
+
+    try {
+      const res = await fetch("/api/perfil/horarios", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accepting_queue: nextAcceptingQueue }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Não foi possível atualizar a disponibilidade.");
+      if (typeof result.acceptingQueue !== "boolean") {
+        throw new Error("O servidor não confirmou o novo estado de disponibilidade.");
+      }
+
+      setAcceptingQueue(result.acceptingQueue);
+      toast.success(
+        result.acceptingQueue
+          ? "Você está online para novos atendimentos."
+          : "Novos atendimentos pausados.",
+        { id: toastId }
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        toast.error(error.message, { id: toastId });
+      } else {
+        toast.error("Ocorreu um erro ao atualizar a disponibilidade.", { id: toastId });
+      }
+    } finally {
+      setIsSavingQueueAvailability(false);
     }
   }
 
@@ -286,6 +332,64 @@ export default function MeusHorariosPage() {
           </p>
         </div>
       )}
+
+      {/* --- CARTÃO 0: DISPONIBILIDADE NA FILA VIRTUAL --- */}
+      <Card className="border-slate-200 shadow-sm rounded-3xl overflow-hidden">
+        <CardHeader className="bg-slate-50 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className={cn("p-2.5 rounded-xl shadow-sm border", acceptingQueue ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200")}>
+              {acceptingQueue ? <Calendar className="size-5 text-emerald-700" /> : <Clock className="size-5 text-amber-700" />}
+            </div>
+            <div>
+              <CardTitle className="text-xl">Disponibilidade na Fila Virtual</CardTitle>
+              <CardDescription className="text-slate-500 font-medium">
+                Controle se você pode receber novas atribuições da fila. Isso não altera seu expediente semanal nem interrompe atendimentos em andamento.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className={cn("font-bold text-base", acceptingQueue ? "text-emerald-700" : "text-amber-700")}>
+              {acceptingQueue ? "Online para novos atendimentos" : "Novos atendimentos pausados"}
+            </div>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              {acceptingQueue
+                ? "Você pode ser considerado nas previsões e atribuições da fila quando estiver dentro do expediente e houver tempo disponível."
+                : "Você não será considerado como opção para novas atribuições enquanto esta pausa estiver ativa."}
+            </p>
+            {!barbershopAcceptsWalkIn && (
+              <p className="text-sm text-amber-700 font-medium pt-1">
+                A fila virtual está desativada globalmente pela gestão. Este controle não pode habilitar a fila da barbearia.
+              </p>
+            )}
+          </div>
+          <Button
+            type="button"
+            onClick={handleToggleQueueAvailability}
+            disabled={isSavingQueueAvailability || !barbershopAcceptsWalkIn}
+            className={cn(
+              "w-full sm:w-auto rounded-xl font-bold min-w-56",
+              acceptingQueue
+                ? "bg-amber-600 hover:bg-amber-700 text-white"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white"
+            )}
+          >
+            {isSavingQueueAvailability ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : acceptingQueue ? (
+              <Clock className="mr-2 size-4" />
+            ) : (
+              <Calendar className="mr-2 size-4" />
+            )}
+            {isSavingQueueAvailability
+              ? "Atualizando disponibilidade..."
+              : acceptingQueue
+                ? "Pausar novos atendimentos"
+                : "Ficar online"}
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* --- CARTÃO 1: EXPEDIENTE SEMANAL --- */}
       <Form {...form}>
