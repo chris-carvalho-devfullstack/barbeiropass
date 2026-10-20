@@ -12,6 +12,7 @@ import {
 
 import {
   estimateQueueWaitTimes,
+  type QueueBarberInput,
   type QueueServiceMode,
   type QueueTicketInput,
   type QueueWaitTimeEstimatorResult,
@@ -186,6 +187,74 @@ function normalizeQueueAcceptancePolicy(
   // Em caso de valor ausente ou desconhecido, adotamos a política
   // conservadora para não permitir entradas além da capacidade atual.
   return DEFAULT_QUEUE_ACCEPTANCE_POLICY;
+}
+
+function findNextProfessionalAvailabilityAt(
+  barbers: QueueBarberInput[],
+  nowDate: Date,
+  timeZone: string,
+  serviceDurationMinutes: number,
+  queueAcceptancePolicy: QueueAcceptancePolicy,
+  skipCurrentLocalDay: boolean
+): string | null {
+  const nowMs = nowDate.getTime();
+  const currentLocalDateKey = getLocalDateKeyInTimeZone(nowDate, timeZone);
+  const durationMs = serviceDurationMinutes * 60_000;
+  const allowServiceToContinueAfterClosing =
+    queueAcceptancePolicy === "accept_until_closing";
+  let earliestStartMs: number | null = null;
+
+  for (const barber of barbers) {
+    if (
+      !barber.isActive ||
+      !barber.acceptingQueue ||
+      (barber.serviceMode !== "queue" && barber.serviceMode !== "hybrid")
+    ) {
+      continue;
+    }
+
+    for (const window of barber.availabilityWindows) {
+      const windowStartMs = Date.parse(window.startAt);
+      const windowEndMs = Date.parse(window.endAt);
+
+      if (
+        !Number.isFinite(windowStartMs) ||
+        !Number.isFinite(windowEndMs) ||
+        windowEndMs <= windowStartMs
+      ) {
+        continue;
+      }
+
+      const candidateStartMs = Math.max(nowMs, windowStartMs);
+
+      if (candidateStartMs >= windowEndMs) {
+        continue;
+      }
+
+      if (
+        skipCurrentLocalDay &&
+        getLocalDateKeyInTimeZone(new Date(candidateStartMs), timeZone) === currentLocalDateKey
+      ) {
+        continue;
+      }
+
+      const serviceFitsWindow = candidateStartMs + durationMs <= windowEndMs;
+      const canStartWithinWindow =
+        allowServiceToContinueAfterClosing || serviceFitsWindow;
+
+      if (!canStartWithinWindow) {
+        continue;
+      }
+
+      if (earliestStartMs === null || candidateStartMs < earliestStartMs) {
+        earliestStartMs = candidateStartMs;
+      }
+    }
+  }
+
+  return earliestStartMs === null
+    ? null
+    : new Date(earliestStartMs).toISOString();
 }
 
 function getLocalDateKeyInTimeZone(
@@ -551,6 +620,7 @@ export async function calculateSupabaseQueueWaitTimes(
   // simulação em memória e nunca é persistido no Supabase.
   const estimate = estimateQueueWaitTimes({
     now: nowDate,
+    timeZone,
     barbershopAcceptsQueue,
     barbers: availability.barbers,
     tickets: queueTickets,
@@ -598,6 +668,25 @@ export async function calculateSupabaseQueueWaitTimes(
         getLocalDateKeyInTimeZone(nowDate, timeZone)
   );
 
+  // Se a previsão restritiva não cabe no dia operacional atual, a próxima
+  // disponibilidade informativa deve apontar para uma janela futura do
+  // expediente, sem transformar o horário até essa data em minutos de espera.
+  const skipCurrentLocalDayForNextAvailability =
+    includePublicPreview &&
+    queueAcceptancePolicy === "restrict_by_capacity" &&
+    (!previewEstimate?.estimatedStartAt || previewStartsOnAnotherLocalDay);
+
+  const nextAvailableAt = barbershopAcceptsQueue
+    ? findNextProfessionalAvailabilityAt(
+        availability.barbers,
+        nowDate,
+        timeZone,
+        defaultQueueDurationMinutes,
+        queueAcceptancePolicy,
+        skipCurrentLocalDayForNextAvailability
+      )
+    : null;
+
   // A situação da barbearia tem prioridade sobre o horário da equipe.
   // Na política restritiva, uma entrada pública só é aceita quando a
   // previsão consegue começar no mesmo dia, dentro da capacidade atual.
@@ -631,7 +720,7 @@ export async function calculateSupabaseQueueWaitTimes(
     nextBusinessOpeningAt: scheduleStatus.nextBusinessOpeningAt,
     businessClosesAt: scheduleStatus.businessClosesAt,
     professionalsAvailableNow: scheduleStatus.professionalsAvailableNow,
-    nextAvailableAt: previewEstimate?.estimatedStartAt ?? null,
+    nextAvailableAt,
   };
 
   return {

@@ -111,6 +111,12 @@ export interface QueueTicketInput {
 export interface QueueWaitTimeEstimatorInput {
   now: Date | string;
 
+  /**
+   * Fuso horário usado para determinar se a previsão permanece no dia
+   * operacional atual. O serviço Supabase deve transmitir o fuso da barbearia.
+   */
+  timeZone?: string;
+
   barbershopAcceptsQueue: boolean;
 
   barbers: QueueBarberInput[];
@@ -195,8 +201,10 @@ export interface QueueTicketEstimate {
   /**
    * Minutos inteiros até o início projetado.
    * Zero significa que o atendimento poderia começar agora.
-   * null significa que não foi encontrada uma oportunidade
-   * nos intervalos recebidos.
+   * null significa que não há uma espera em minutos apropriada para exibição
+   * (por exemplo, quando a política restritiva empurra o início para outro dia),
+   * ou que não foi encontrada uma oportunidade nos intervalos recebidos.
+   * estimatedStartAt pode continuar informando a próxima data/hora viável.
    */
   estimatedWaitMinutes: number | null;
 
@@ -316,6 +324,54 @@ function parseTimestamp(
   }
 
   return timestamp;
+}
+
+function createLocalDateFormatter(
+  timeZone: string
+): Intl.DateTimeFormat {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch {
+    throw new Error(
+      `[QueueWaitTimeEstimator] Fuso horário inválido: "${timeZone}".`
+    );
+  }
+}
+
+function getLocalDateKey(
+  timestampMs: number,
+  formatter: Intl.DateTimeFormat
+): string {
+  const values = new Map(
+    formatter
+      .formatToParts(new Date(timestampMs))
+      .map((part) => [part.type, part.value])
+  );
+
+  const year = values.get("year");
+  const month = values.get("month");
+  const day = values.get("day");
+
+  if (!year || !month || !day) {
+    throw new Error(
+      "[QueueWaitTimeEstimator] Não foi possível determinar a data local da estimativa."
+    );
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+function isOnSameLocalDay(
+  targetMs: number,
+  nowLocalDateKey: string,
+  formatter: Intl.DateTimeFormat
+): boolean {
+  return getLocalDateKey(targetMs, formatter) === nowLocalDateKey;
 }
 
 function validateDuration(
@@ -443,6 +499,10 @@ function findEarliestStart(
         candidateFinishMs <= window.endMs
       )
     ) {
+      // Retemos a próxima data/hora viável mesmo que esteja em outro dia.
+      // A camada que monta o resultado decide se deve mostrar um número de
+      // minutos. Na política restritiva, o horário futuro serve para informar
+      // a próxima disponibilidade, mas não deve virar uma espera exorbitante.
       return candidateStartMs;
     }
   }
@@ -553,6 +613,11 @@ export function estimateQueueWaitTimes(
 ): QueueWaitTimeEstimatorResult {
   const nowMs = parseTimestamp(input.now, "now");
   const calculatedAt = new Date(nowMs).toISOString();
+  const timeZone = input.timeZone ?? "America/Sao_Paulo";
+  const localDateFormatter = createLocalDateFormatter(timeZone);
+  const nowLocalDateKey = getLocalDateKey(nowMs, localDateFormatter);
+  const allowQueueToContinueAfterClosing =
+    input.allowQueueToContinueAfterClosing ?? false;
 
   const barberIds = new Set<string>();
 
@@ -722,6 +787,12 @@ export function estimateQueueWaitTimes(
     const entry = waitingEntries[index];
     const ticket = entry.ticket;
 
+    // A política de admissão vale para o ticket hipotético que ainda está
+    // tentando entrar. Clientes já aceitos continuam sendo projetados na fila,
+    // sem serem deslocados artificialmente para a próxima abertura.
+    const allowQueueContinuationForThisTicket =
+      allowQueueToContinueAfterClosing || !entry.isPreview;
+
     const duration = validateDuration(
       ticket.estimatedDurationMinutes,
       ticket.id
@@ -763,12 +834,21 @@ export function estimateQueueWaitTimes(
             preferredTimeline,
             preferredTimeline.nextAvailableAtMs,
             duration,
-            input.allowQueueToContinueAfterClosing ?? false
+            allowQueueContinuationForThisTicket
           )
         : null;
 
+    const preferredStartIsOnAnotherLocalDay =
+      preferredStartMs !== null &&
+      !isOnSameLocalDay(
+        preferredStartMs,
+        nowLocalDateKey,
+        localDateFormatter
+      );
+
     const estimatedWaitForPreferredBarberMinutes =
-      preferredStartMs === null
+      preferredStartMs === null ||
+      (!allowQueueContinuationForThisTicket && preferredStartIsOnAnotherLocalDay)
         ? null
         : minutesUntil(nowMs, preferredStartMs);
 
@@ -788,7 +868,7 @@ export function estimateQueueWaitTimes(
         timeline,
         timeline.nextAvailableAtMs,
         duration,
-        input.allowQueueToContinueAfterClosing ?? false
+        allowQueueContinuationForThisTicket
       );
 
       if (startMs === null) {
@@ -821,17 +901,19 @@ export function estimateQueueWaitTimes(
       projectedBarberName = timeline.barber.name;
 
       timeline.projectedTicketCount += 1;
-      projectedBarberPosition =
-        timeline.projectedTicketCount;
+      projectedBarberPosition = timeline.projectedTicketCount;
 
-      estimatedStartAt = new Date(
-        startMs
-      ).toISOString();
-
-      estimatedWaitMinutes = minutesUntil(
-        nowMs,
-        startMs
+      estimatedStartAt = new Date(startMs).toISOString();
+      const selectedStartIsOnAnotherLocalDay = !isOnSameLocalDay(
+        startMs,
+        nowLocalDateKey,
+        localDateFormatter
       );
+
+      estimatedWaitMinutes =
+        !allowQueueContinuationForThisTicket && selectedStartIsOnAnotherLocalDay
+          ? null
+          : minutesUntil(nowMs, startMs);
 
       timeline.nextAvailableAtMs =
         startMs + duration * MINUTE_MS;

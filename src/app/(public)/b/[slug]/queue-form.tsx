@@ -198,16 +198,17 @@ export default function QueueForm({
     : null;
   const isActiveServiceStatus =
     currentStatus === "in_progress" || currentStatus === "in_chair";
-  const isBeforeJoiningQueue =
-    !inQueue &&
-    !isTerminalStatus(currentStatus) &&
-    !isActiveServiceStatus;
+  const isWaitingInQueue = inQueue && currentStatus === "waiting";
+
+  // Antes da entrada, os indicadores públicos só aparecem quando a API
+  // confirma que uma nova entrada é permitida. Quem já está aguardando
+  // mantém os indicadores agregados, mesmo que a fila tenha fechado para
+  // novas entradas depois que seu ticket foi aceito.
   const canShowPublicQueueMetrics =
-    publicAvailability?.status === "available" ||
-    (isBeforeJoiningQueue && publicAvailability !== null);
+    publicAvailability?.status === "available" || isWaitingInQueue;
   const canShowPersonalWaitEstimate =
-    canShowPublicQueueMetrics ||
-    (inQueue && currentStatus === "waiting" && queueEstimateReceived);
+    publicAvailability?.status === "available" ||
+    (isWaitingInQueue && queueEstimateReceived);
   const canEnterPublicQueue = publicAvailability?.status === "available";
   const ticketHasLinkedAccount = Boolean(ticketClientAuthId);
 
@@ -405,9 +406,7 @@ export default function QueueForm({
           nextAvailableAt:
             typeof availabilityData.nextAvailableAt === "string"
               ? availabilityData.nextAvailableAt
-              : typeof queueEstimate?.estimatedStartAt === "string"
-                ? queueEstimate.estimatedStartAt
-                : null,
+              : null,
         });
       } else {
         setPublicAvailability(null);
@@ -982,6 +981,19 @@ export default function QueueForm({
     );
   };
 
+  const shouldShowNextBusinessOpening = Boolean(
+    publicAvailability &&
+      publicAvailability.status !== "available" &&
+      publicAvailability.status !== "queue_unavailable" &&
+      publicAvailability.nextBusinessOpeningAt &&
+      (
+        publicAvailability.status === "barbershop_closed" ||
+        !publicAvailability.nextAvailableAt ||
+        Date.parse(publicAvailability.nextAvailableAt) >=
+          Date.parse(publicAvailability.nextBusinessOpeningAt)
+      )
+  );
+
   if (!mounted) return null;
 
   return (
@@ -1010,7 +1022,7 @@ export default function QueueForm({
                   {estimatedWaitTime !== null && <span className="text-sm"> min</span>}
                 </span>
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                  {canShowPublicQueueMetrics ? "Espera Est." : "Sua espera Est."}
+                  {isWaitingInQueue ? "Sua espera Est." : "Espera Est."}
                 </span>
               </div>
             )}
@@ -1084,33 +1096,56 @@ export default function QueueForm({
               )}
             >
               {publicAvailability.status === "barbershop_closed"
-                ? "A barbearia já encerrou o expediente. A previsão considera nosso horário de funcionamento e será retomada na próxima abertura."
+                ? "A barbearia está fechada neste momento. Confira abaixo a próxima abertura e o próximo horário compatível com a agenda dos profissionais."
                 : publicAvailability.status === "professionals_off_shift"
-                  ? "Os horários e as pausas dos profissionais limitam quando um novo atendimento pode começar."
+                  ? publicAvailability.nextAvailableAt
+                    ? "No momento, não há um profissional elegível em expediente. A próxima janela compatível com os horários cadastrados aparece abaixo."
+                    : "Os horários e as pausas cadastradas não permitem confirmar uma próxima janela de atendimento. Entre em contato com a recepção para verificar a disponibilidade."
                   : publicAvailability.status === "queue_unavailable"
                     ? "No momento, não estamos aceitando novas entradas pela fila virtual. Consulte a recepção para conferir as opções de atendimento."
-                    : "Não há um horário futuro confirmado na agenda atual. Entre em contato com a recepção para verificar a próxima disponibilidade."}
+                    : publicAvailability.nextAvailableAt
+                      ? "A capacidade restante do expediente não permite aceitar uma nova entrada neste momento. Confira abaixo a próxima janela compatível com os horários cadastrados."
+                      : "Não foi possível confirmar um horário futuro compatível com a agenda atual. Entre em contato com a recepção para verificar a próxima disponibilidade."}
             </p>
 
-            {publicAvailability.status === "barbershop_closed" &&
-              publicAvailability.nextBusinessOpeningAt && (
+            {shouldShowNextBusinessOpening &&
+              publicAvailability?.nextBusinessOpeningAt && (
                 <p className="mt-2 text-sm font-semibold text-amber-950">
-                  Próxima abertura: {formatFriendlyScheduleDateTime(publicAvailability.nextBusinessOpeningAt)}.
+                  Próxima abertura da barbearia: {formatFriendlyScheduleDateTime(publicAvailability.nextBusinessOpeningAt)}.
+                </p>
+              )}
+
+            {publicAvailability.status !== "queue_unavailable" &&
+              publicAvailability.nextAvailableAt &&
+              (!publicAvailability.nextBusinessOpeningAt ||
+                Date.parse(publicAvailability.nextAvailableAt) !==
+                  Date.parse(publicAvailability.nextBusinessOpeningAt)) && (
+                <p className="mt-2 text-sm font-semibold text-blue-950">
+                  Próximo horário compatível com o expediente dos profissionais: {formatFriendlyScheduleDateTime(publicAvailability.nextAvailableAt)}.
                 </p>
               )}
 
             {publicAvailability.status === "barbershop_closed" &&
-              !publicAvailability.nextBusinessOpeningAt && (
+              !publicAvailability.nextBusinessOpeningAt &&
+              !publicAvailability.nextAvailableAt && (
                 <p className="mt-2 text-sm font-semibold text-amber-950">
-                  Não há uma próxima abertura cadastrada. Entre em contato com a recepção para confirmar os horários.
+                  Não há uma próxima abertura ou disponibilidade profissional cadastrada. Entre em contato com a recepção para confirmar os horários.
                 </p>
               )}
 
-            {publicAvailability.status === "barbershop_closed" &&
-              publicAvailability.nextBusinessOpeningAt &&
+            {shouldShowNextBusinessOpening &&
+              publicAvailability?.nextBusinessOpeningAt &&
               !publicAvailability.nextAvailableAt && (
                 <p className="mt-1 text-sm text-amber-950/90">
-                  A disponibilidade de um profissional após a abertura ainda precisa ser confirmada.
+                  A próxima abertura está cadastrada, mas não foi possível confirmar um próximo horário de atendimento para a fila. Entre em contato com a recepção para verificar a disponibilidade.
+                </p>
+              )}
+
+            {publicAvailability.status !== "barbershop_closed" &&
+              publicAvailability.status !== "queue_unavailable" &&
+              !publicAvailability.nextAvailableAt && (
+                <p className="mt-2 text-sm font-semibold text-blue-950">
+                  Não foi possível confirmar uma próxima janela de atendimento nos horários cadastrados. Entre em contato com a recepção para verificar a disponibilidade.
                 </p>
               )}
 
@@ -1131,7 +1166,11 @@ export default function QueueForm({
           </div>
         )}
 
-      {!isScanning && !showManualPin && !isTerminalStatus(currentStatus) && (
+      {!isScanning &&
+        !showManualPin &&
+        !isTerminalStatus(currentStatus) &&
+        !isActiveServiceStatus &&
+        (inQueue || publicAvailability?.status === "available") && (
         <p className="text-sm font-medium text-slate-600 text-center">
           {user ? (
             <>Olá, <span className="font-bold text-slate-900">{userName}</span>!</>

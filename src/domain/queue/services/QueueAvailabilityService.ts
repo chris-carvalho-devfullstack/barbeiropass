@@ -84,7 +84,7 @@ export interface QueueAvailabilityScheduleStatus {
   businessHoursConfigured: boolean;
   /** null quando não há expediente geral cadastrado. */
   businessOpenNow: boolean | null;
-  /** Próxima abertura geral, quando a barbearia está fechada. */
+  /** Próxima abertura geral posterior ao instante atual, quando houver horário cadastrado. */
   nextBusinessOpeningAt: string | null;
   /** Fechamento de hoje, quando a barbearia está aberta agora. */
   businessClosesAt: string | null;
@@ -431,15 +431,9 @@ function calculateBusinessScheduleStatus(
     }
   }
 
-  if (businessOpenNow) {
-    return {
-      businessHoursConfigured: true,
-      businessOpenNow: true,
-      nextBusinessOpeningAt: null,
-      businessClosesAt,
-    };
-  }
-
+  // Sempre calculamos a próxima abertura futura, mesmo enquanto a barbearia
+  // está aberta. Isso permite informar a abertura do próximo dia quando a fila
+  // parar de aceitar novas entradas por capacidade antes do fechamento atual.
   let nextBusinessOpeningAt: string | null = null;
 
   for (let dayOffset = 0; dayOffset <= daysAhead; dayOffset++) {
@@ -478,9 +472,9 @@ function calculateBusinessScheduleStatus(
 
   return {
     businessHoursConfigured: true,
-    businessOpenNow: false,
+    businessOpenNow,
     nextBusinessOpeningAt,
-    businessClosesAt: null,
+    businessClosesAt,
   };
 }
 
@@ -490,8 +484,7 @@ function buildBarberAvailabilityWindows(
   daysAhead: number,
   formatter: Intl.DateTimeFormat,
   timeZone: string,
-  businessHoursByDay: Map<number, QueueBusinessHourInput> | null,
-  allowQueueToContinueAfterClosing: boolean
+  businessHoursByDay: Map<number, QueueBusinessHourInput> | null
 ): QueueAvailabilityWindow[] {
   const scheduleByDay = new Map<number, QueueWorkingHourInput>();
 
@@ -645,14 +638,12 @@ function buildBarberAvailabilityWindows(
         endAt: new Date(interval.endMs).toISOString(),
       };
 
-      // Somente a última janela efetivamente disponível do dia pode
-      // carregar esta permissão. Assim, a sequência da fila pode avançar
-      // depois do fechamento, mas bloqueios intermediários (por exemplo,
-      // almoço) continuam sendo respeitados pelo estimador.
-      if (
-        allowQueueToContinueAfterClosing &&
-        interval.endMs === effectiveEndMs
-      ) {
+      // Marca a última janela efetivamente disponível do dia. O estimador
+      // decide separadamente se esta fronteira pode ser ultrapassada: tickets
+      // já aceitos podem continuar na simulação; um novo ticket de preview só
+      // pode ultrapassá-la quando a política configurada permitir.
+      // Bloqueios intermediários (por exemplo, almoço) continuam respeitados.
+      if (interval.endMs === effectiveEndMs) {
         availabilityWindow.allowQueueToContinueAfterWindow = true;
       }
 
@@ -773,8 +764,7 @@ export function buildQueueAvailability(
       daysAhead,
       formatter,
       input.timeZone,
-      businessHoursByDay,
-      input.allowQueueToContinueAfterClosing ?? false
+      businessHoursByDay
     );
 
     const serviceMode: QueueServiceMode =
