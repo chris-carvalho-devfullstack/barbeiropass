@@ -45,7 +45,10 @@ export default async function PublicBarbershopPage({ params, searchParams }: Pag
   const brazilTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
   const currentDow = brazilTime.getDay();
 
-  const { data: rawBarbers } = await supabase
+  // A consulta privilegiada é executada exclusivamente no servidor.
+  // A resposta enviada ao componente público é limitada a id, nome e avatar.
+  // Isso permite remover as políticas de leitura pública das tabelas staff e staff_working_hours.
+  const { data: rawBarbers } = await supabaseAdmin
     .from("staff")
     .select(`
       id, 
