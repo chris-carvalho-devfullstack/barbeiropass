@@ -981,17 +981,24 @@ export default function QueueForm({
     );
   };
 
-  const shouldShowNextBusinessOpening = Boolean(
+  const isBarbershopClosed =
+    publicAvailability?.status === "barbershop_closed";
+
+  const hasNoEligibleProfessionalNow = Boolean(
     publicAvailability &&
-      publicAvailability.status !== "available" &&
+      !isBarbershopClosed &&
       publicAvailability.status !== "queue_unavailable" &&
-      publicAvailability.nextBusinessOpeningAt &&
       (
-        publicAvailability.status === "barbershop_closed" ||
-        !publicAvailability.nextAvailableAt ||
-        Date.parse(publicAvailability.nextAvailableAt) >=
-          Date.parse(publicAvailability.nextBusinessOpeningAt)
+        publicAvailability.status === "professionals_off_shift" ||
+        (
+          publicAvailability.businessOpenNow === true &&
+          publicAvailability.professionalsAvailableNow === 0
+        )
       )
+  );
+
+  const shouldShowNextBusinessOpening = Boolean(
+    isBarbershopClosed && publicAvailability?.nextBusinessOpeningAt
   );
 
   if (!mounted) return null;
@@ -1036,7 +1043,7 @@ export default function QueueForm({
                     {eligibleBarberCount === null ? "—" : eligibleBarberCount}
                   </span>
                   <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                    Profissionais elegíveis
+                    Barbers
                   </span>
                 </div>
               </>
@@ -1077,10 +1084,10 @@ export default function QueueForm({
                     : "text-blue-950"
                 )}
               >
-                {publicAvailability.status === "barbershop_closed"
+                {isBarbershopClosed
                   ? "Estamos fechados neste momento"
-                  : publicAvailability.status === "professionals_off_shift"
-                    ? "Nossa equipe não está atendendo neste horário"
+                  : hasNoEligibleProfessionalNow
+                    ? "Nenhum profissional disponível para a fila"
                     : publicAvailability.status === "queue_unavailable"
                       ? "A fila virtual está indisponível"
                       : "Não encontramos um próximo horário disponível"}
@@ -1095,17 +1102,21 @@ export default function QueueForm({
                   : "text-blue-900/90"
               )}
             >
-              {publicAvailability.status === "barbershop_closed"
-                ? "A barbearia está fechada neste momento. Confira abaixo a próxima abertura e o próximo horário compatível com a agenda dos profissionais."
-                : publicAvailability.status === "professionals_off_shift"
+              {isBarbershopClosed
+                ? publicAvailability.nextAvailableAt
+                  ? "A barbearia está fechada neste momento. Confira abaixo a próxima abertura e o próximo horário compatível com a agenda dos profissionais."
+                  : publicAvailability.nextBusinessOpeningAt
+                    ? "A barbearia está fechada neste momento. A próxima abertura está informada abaixo, mas ainda não foi possível confirmar um próximo horário de atendimento para a fila. Entre em contato com a recepção para verificar a disponibilidade."
+                    : "A barbearia está fechada neste momento e não há uma próxima abertura ou disponibilidade profissional cadastrada. Entre em contato com a recepção para confirmar os horários."
+                : hasNoEligibleProfessionalNow
                   ? publicAvailability.nextAvailableAt
-                    ? "No momento, não há um profissional elegível em expediente. A próxima janela compatível com os horários cadastrados aparece abaixo."
-                    : "Os horários e as pausas cadastradas não permitem confirmar uma próxima janela de atendimento. Entre em contato com a recepção para verificar a disponibilidade."
+                    ? "No momento, nenhum profissional está disponível para receber novas entradas pela fila. O próximo horário compatível aparece abaixo."
+                    : "A barbearia está aberta, mas nenhum profissional está disponível para receber novas entradas pela fila neste momento. Entre em contato com a recepção para verificar as opções de atendimento."
                   : publicAvailability.status === "queue_unavailable"
                     ? "No momento, não estamos aceitando novas entradas pela fila virtual. Consulte a recepção para conferir as opções de atendimento."
                     : publicAvailability.nextAvailableAt
                       ? "A capacidade restante do expediente não permite aceitar uma nova entrada neste momento. Confira abaixo a próxima janela compatível com os horários cadastrados."
-                      : "Não foi possível confirmar um horário futuro compatível com a agenda atual. Entre em contato com a recepção para verificar a próxima disponibilidade."}
+                      : "Não foi possível confirmar um horário futuro compatível com a capacidade e os horários atuais da fila. Entre em contato com a recepção para verificar a próxima disponibilidade."}
             </p>
 
             {shouldShowNextBusinessOpening &&
@@ -1125,29 +1136,7 @@ export default function QueueForm({
                 </p>
               )}
 
-            {publicAvailability.status === "barbershop_closed" &&
-              !publicAvailability.nextBusinessOpeningAt &&
-              !publicAvailability.nextAvailableAt && (
-                <p className="mt-2 text-sm font-semibold text-amber-950">
-                  Não há uma próxima abertura ou disponibilidade profissional cadastrada. Entre em contato com a recepção para confirmar os horários.
-                </p>
-              )}
 
-            {shouldShowNextBusinessOpening &&
-              publicAvailability?.nextBusinessOpeningAt &&
-              !publicAvailability.nextAvailableAt && (
-                <p className="mt-1 text-sm text-amber-950/90">
-                  A próxima abertura está cadastrada, mas não foi possível confirmar um próximo horário de atendimento para a fila. Entre em contato com a recepção para verificar a disponibilidade.
-                </p>
-              )}
-
-            {publicAvailability.status !== "barbershop_closed" &&
-              publicAvailability.status !== "queue_unavailable" &&
-              !publicAvailability.nextAvailableAt && (
-                <p className="mt-2 text-sm font-semibold text-blue-950">
-                  Não foi possível confirmar uma próxima janela de atendimento nos horários cadastrados. Entre em contato com a recepção para verificar a disponibilidade.
-                </p>
-              )}
 
 
           </div>
@@ -1199,7 +1188,7 @@ export default function QueueForm({
                     <Camera className="mr-2" size={20} /> Ler QR Code da Recepção
                   </Button>
                   <button type="button" onClick={() => setShowManualPin(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-4 pt-2 pb-2 transition-colors">
-                    Câmera não funciona? Digitar código
+                    Ou Digite o Código PIN
                   </button>
 
                   {user ? (
