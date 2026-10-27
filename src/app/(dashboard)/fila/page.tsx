@@ -22,6 +22,12 @@ interface QueueItem {
     joined_at: string;
     barber_name: string | null;
     barber_id: string | null;
+    preferred_barber_id: string | null;
+    preferred_staff: {
+        full_name: string;
+    } | {
+        full_name: string;
+    }[] | null;
     staff: {
         full_name: string;
     } | {
@@ -43,6 +49,15 @@ interface MemberResponse {
         slug: string;
     } | null;
 }
+interface QueueStartConfirmationState {
+    id: string;
+    clientName: string;
+    requiresClientConsent: boolean;
+    requiresQueueOrderOverride: boolean;
+    preferredBarberName: string | null;
+    waitingAheadCount: number;
+}
+
 function formatQueueClientName(name: string): string {
     const parts = name.trim().split(/\s+/);
     if (parts.length <= 1) {
@@ -67,13 +82,16 @@ export default function FilaDashboard() {
     const [finishingQueueId, setFinishingQueueId] = useState<string | null>(null);
     const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]); // <-- ARRAY AQUI
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [startConfirmation, setStartConfirmation] = useState<QueueStartConfirmationState | null>(null);
+    const [clientConsentConfirmed, setClientConsentConfirmed] = useState(false);
+    const [queueOrderConfirmed, setQueueOrderConfirmed] = useState(false);
     const supabase = useMemo(() => createClient(), []);
     // Fetch da Fila
     const fetchQueue = useCallback(async (bid: string) => {
         try {
             const { data, error } = await supabase
                 .from("virtual_queue")
-                .select("id, client_name, client_id, client_auth_id, status, joined_at, barber_name, barber_id, staff!virtual_queue_barber_id_fkey(full_name)")
+                .select("id, client_name, client_id, client_auth_id, status, joined_at, barber_name, barber_id, preferred_barber_id, staff!virtual_queue_barber_id_fkey(full_name), preferred_staff:staff!virtual_queue_preferred_barber_fk(full_name)")
                 .eq("barbershop_id", bid)
                 .in("status", ["waiting", "in_progress"])
                 .order("joined_at", { ascending: true });
@@ -160,14 +178,85 @@ export default function FilaDashboard() {
     }
     // Mudar o estado de um cliente (Chamar ou Cancelar)
     async function handleStatus(id: string, status: QueueStatus) {
-        const res = await updateQueueStatusAction(id, status);
-        if (res.success) {
-            toast.success("Fila atualizada!");
-            if (barbershop)
-                fetchQueue(barbershop.id);
+        setIsSubmitting(true);
+        try {
+            const res = await updateQueueStatusAction(id, status);
+
+            if ("confirmationRequired" in res && res.confirmationRequired) {
+                setStartConfirmation({
+                    id,
+                    clientName: res.clientName || queue.find((item) => item.id === id)?.client_name || "Cliente",
+                    requiresClientConsent: res.requiresClientConsent,
+                    requiresQueueOrderOverride: res.requiresQueueOrderOverride,
+                    preferredBarberName: res.preferredBarberName,
+                    waitingAheadCount: res.waitingAheadCount,
+                });
+                setClientConsentConfirmed(false);
+                setQueueOrderConfirmed(false);
+                return;
+            }
+
+            if ("success" in res && res.success) {
+                toast.success(status === "cancelled" ? "Cliente removido da fila." : "Fila atualizada!");
+                if (barbershop) await fetchQueue(barbershop.id);
+                return;
+            }
+
+            toast.error(("error" in res && res.error) || "Erro ao atualizar.");
+        } catch (error) {
+            console.error("Erro ao atualizar atendimento:", error);
+            toast.error("Não foi possível atualizar a fila. Tente novamente.");
+        } finally {
+            setIsSubmitting(false);
         }
-        else {
-            toast.error(res.error || "Erro ao atualizar.");
+    }
+
+    async function handleConfirmStart() {
+        if (!startConfirmation) return;
+
+        setIsSubmitting(true);
+        try {
+            const res = await updateQueueStatusAction(
+                startConfirmation.id,
+                "in_progress",
+                undefined,
+                undefined,
+                {
+                    clientAcceptedDifferentBarber: clientConsentConfirmed,
+                    confirmedOutOfOrder: queueOrderConfirmed,
+                }
+            );
+
+            if ("confirmationRequired" in res && res.confirmationRequired) {
+                setStartConfirmation({
+                    id: startConfirmation.id,
+                    clientName: res.clientName || startConfirmation.clientName,
+                    requiresClientConsent: res.requiresClientConsent,
+                    requiresQueueOrderOverride: res.requiresQueueOrderOverride,
+                    preferredBarberName: res.preferredBarberName,
+                    waitingAheadCount: res.waitingAheadCount,
+                });
+                setClientConsentConfirmed(false);
+                setQueueOrderConfirmed(false);
+                toast.message("A fila mudou. Revise as confirmações antes de iniciar.");
+                return;
+            }
+
+            if ("success" in res && res.success) {
+                toast.success("Atendimento iniciado.");
+                setStartConfirmation(null);
+                setClientConsentConfirmed(false);
+                setQueueOrderConfirmed(false);
+                if (barbershop) await fetchQueue(barbershop.id);
+                return;
+            }
+
+            toast.error(("error" in res && res.error) || "Não foi possível iniciar o atendimento.");
+        } catch (error) {
+            console.error("Erro ao iniciar atendimento:", error);
+            toast.error("Não foi possível iniciar o atendimento. Atualize a fila e tente novamente.");
+        } finally {
+            setIsSubmitting(false);
         }
     }
     // Abrir Modal de Finalização
@@ -415,8 +504,15 @@ export default function FilaDashboard() {
                     displayName = item.barber_name;
                     prefix = "Com:";
                 }
-                else if (item.status === "waiting" && item.staff) {
-                    displayName = Array.isArray(item.staff) ? item.staff[0]?.full_name : item.staff.full_name;
+                else if (item.status === "waiting") {
+                    // Preferência canônica para novos tickets; item.staff é fallback
+                    // para tickets antigos que guardavam a preferência em barber_id.
+                    const preferredStaff = item.preferred_staff ?? item.staff;
+                    if (preferredStaff) {
+                        displayName = Array.isArray(preferredStaff)
+                            ? preferredStaff[0]?.full_name
+                            : preferredStaff.full_name;
+                    }
                 }
                 if (!displayName)
                     return null;
@@ -439,7 +535,7 @@ export default function FilaDashboard() {
 
                 {item.status === 'waiting' && (<>
 
-                    <Button variant="ghost" onClick={() => handleStatus(item.id, 'in_progress')} className="text-blue-600 hover:bg-blue-50 h-12 w-12 p-0 rounded-2xl transition-all" title="Iniciar Atendimento">
+                    <Button variant="ghost" onClick={() => handleStatus(item.id, 'in_progress')} disabled={isSubmitting} className="text-blue-600 hover:bg-blue-50 h-12 w-12 p-0 rounded-2xl transition-all" title="Iniciar Atendimento">
 
                       <Play className="size-6 fill-current"/>
 
@@ -464,6 +560,92 @@ export default function FilaDashboard() {
             </div>)))}
 
       </div>
+
+      {/* CONFIRMAÇÃO DE PREFERÊNCIA E ORDEM DA FILA */}
+      <Dialog
+        open={Boolean(startConfirmation)}
+        onOpenChange={(open) => {
+          if (!open && !isSubmitting) {
+            setStartConfirmation(null);
+            setClientConsentConfirmed(false);
+            setQueueOrderConfirmed(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold tracking-tight text-slate-950">
+              Confirmar início do atendimento
+            </DialogTitle>
+          </DialogHeader>
+
+          <p className="text-sm leading-6 text-slate-600">
+            Você está prestes a iniciar o atendimento de <strong className="font-semibold text-slate-900">{startConfirmation?.clientName}</strong>.
+            Revise as condições abaixo antes de continuar.
+          </p>
+
+          {startConfirmation?.requiresClientConsent && (
+            <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-sm leading-5 text-amber-950">
+              <input
+                type="checkbox"
+                className="mt-1 size-4 shrink-0 accent-amber-700"
+                checked={clientConsentConfirmed}
+                onChange={(event) => setClientConsentConfirmed(event.target.checked)}
+                disabled={isSubmitting}
+              />
+              <span>
+                O cliente informou que aceita ser atendido por outro profissional, apesar da preferência cadastrada
+                {startConfirmation.preferredBarberName ? ` por ${startConfirmation.preferredBarberName}` : ""}.
+                Confirmo que obtive essa aceitação antes de iniciar.
+              </span>
+            </label>
+          )}
+
+          {startConfirmation?.requiresQueueOrderOverride && (
+            <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-5 text-slate-800">
+              <input
+                type="checkbox"
+                className="mt-1 size-4 shrink-0 accent-slate-900"
+                checked={queueOrderConfirmed}
+                onChange={(event) => setQueueOrderConfirmed(event.target.checked)}
+                disabled={isSubmitting}
+              />
+              <span>
+                Estou ciente de que há {startConfirmation.waitingAheadCount} {startConfirmation.waitingAheadCount === 1 ? "cliente aguardando" : "clientes aguardando"} antes deste na ordem da fila e confirmo que devo iniciar este atendimento fora da ordem.
+              </span>
+            </label>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmitting}
+              onClick={() => {
+                setStartConfirmation(null);
+                setClientConsentConfirmed(false);
+                setQueueOrderConfirmed(false);
+              }}
+            >
+              Voltar
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                isSubmitting ||
+                !startConfirmation ||
+                (startConfirmation.requiresClientConsent && !clientConsentConfirmed) ||
+                (startConfirmation.requiresQueueOrderOverride && !queueOrderConfirmed)
+              }
+              onClick={handleConfirmStart}
+              className="bg-slate-950 text-white hover:bg-slate-800"
+            >
+              {isSubmitting ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              Confirmar e iniciar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* MODAL MODERNO DE SELEÇÃO DE MÚLTIPLOS SERVIÇOS */}
 

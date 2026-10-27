@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       .from('staff')
       .insert({
         barbershop_id: validatedData.barbershop_id,
-        profile_id: validatedData.profile_id || null,
+        profile_id: null,
         role: validatedData.role,
         full_name: validatedData.full_name,
         cpf: validatedData.cpf || null,
@@ -262,6 +262,18 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: 'Acesso negado.' }, { status: 403 });
     }
 
+    const { data: existingStaff, error: existingStaffError } = await supabase
+      .from('staff')
+      .select('id, barbershop_id')
+      .eq('id', staffId)
+      .eq('barbershop_id', validatedData.barbershop_id)
+      .maybeSingle();
+
+    if (existingStaffError) throw existingStaffError;
+    if (!existingStaff) {
+      return NextResponse.json({ error: 'Profissional não encontrado nesta barbearia.' }, { status: 404 });
+    }
+
     // 5. Atualiza os dados na tabela 'staff'
     const { error: updateError } = await supabase
       .from('staff')
@@ -278,7 +290,8 @@ export async function PUT(request: Request) {
         payment_model: validatedData.payment_model,
         fixed_fee_amount: validatedData.fixed_fee_amount,
       })
-      .eq('id', staffId);
+      .eq('id', staffId)
+      .eq('barbershop_id', validatedData.barbershop_id);
 
     if (updateError) {
       if (updateError.code === '23505') return NextResponse.json({ error: 'CPF/CNPJ já cadastrado.' }, { status: 400 });
@@ -331,7 +344,7 @@ export async function PUT(request: Request) {
 // ==========================================
 // BUSCA SEGURA DE EQUIPE (GET) - ZERO TRUST
 // ==========================================
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const supabase = await createClient();
     

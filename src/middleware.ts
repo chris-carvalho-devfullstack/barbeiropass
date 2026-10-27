@@ -1,23 +1,18 @@
-import { type NextRequest } from 'next/server'
-import { updateSession } from '@/utils/supabase/middleware'
+import { type NextRequest } from "next/server";
+import { updateSession } from "@/utils/supabase/middleware";
 
 export async function middleware(request: NextRequest) {
-  return await updateSession(request)
+  return await updateSession(request);
 }
 
 export const config = {
   matcher: [
     /*
-     * DEFESA EM PROFUNDIDADE (Lista VIP Pública):
-     * O Middleware protege TUDO no sistema e força o login, EXCETO:
-     * 
-     * 1. Arquivos estáticos do sistema Next.js e imagens
-     * 2. /b/ -> As páginas públicas das barbearias que os clientes acessam
-     * 3. /api/join-queue -> API para entrar na fila (Avulso ou Logado)
-     * 4. /api/verify-pin -> API para verificação de PIN no salão
-     * 5. /api/submit-review -> API para o cliente avaliar o atendimento
-     * 6. Rotas de autenticação (/login, /cadastro, /auth)
+     * Executa nas rotas privadas e também na página de login para redirecionar
+     * sessões já autenticadas conforme seus papéis.
+     * Mantém públicas as páginas de autenticação, a fila pública, o endpoint
+     * que resolve o destino e a página de aceitação do convite.
      */
-    '/((?!_next/static|_next/image|favicon.ico|b/|api/join-queue|api/public/|api/verify-pin|api/submit-review|login|cadastro|auth/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    "/((?!_next/static|_next/image|favicon.ico|b/|api/join-queue|api/public/|api/verify-pin|api/submit-review|api/auth/destination|convite/profissional/aceitar|acesso-negado|cadastro|auth/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
-}
+};

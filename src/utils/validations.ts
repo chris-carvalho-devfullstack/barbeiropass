@@ -81,21 +81,27 @@ export const isValidCNPJ = (cnpj: string) => {
 
 export const staffFormSchema = z.object({
   barbershop_id: z.string().uuid("ID da barbearia inválido"),
+  // Mantido apenas por compatibilidade com formulários legados. A API de cadastro
+  // não aceita o valor enviado pelo cliente para vincular uma conta ao staff.
   profile_id: z.string().uuid().optional().nullable(),
   role: z.enum(['owner', 'manager', 'barber', 'receptionist'], {
     message: "O cargo é obrigatório e deve ser válido",
   }),
   full_name: z.string().min(3, "O nome deve ter pelo menos 3 caracteres"),
-  
+
+  // E-mail de acesso ao portal. Ele é registrado no convite, não na tabela staff.
+  // Permitir vazio mantém compatibilidade com fichas antigas e com cadastros sem convite.
+  access_email: z.string().trim().toLowerCase().email("Informe um e-mail de acesso válido.").or(z.literal("")).optional().nullable(),
+
   cpf: z.string()
     .optional()
     .nullable()
     .refine((val) => {
-      if (!val) return true; 
+      if (!val) return true;
       return isValidCPF(val);
     }, { message: "CPF inválido" }),
 
-    cnpj: z.string()
+  cnpj: z.string()
     .optional()
     .nullable()
     .refine((val) => {
@@ -114,15 +120,15 @@ export const staffFormSchema = z.object({
   education_level: z.string().optional().nullable(),
   barber_courses: z.string().optional().nullable(),
   previous_experience: z.string().optional().nullable(),
-  
+
   payment_model: z.enum(['commission', 'fixed_fee']),
-  
+
   // NOVOS CAMPOS PARA CONTROLE DE COMISSÃO
   commission_type: z.enum(['global', 'specific']).optional(),
   global_commission: z.coerce.number().min(0, "Mínimo 0%").max(100, "Máximo 100%").optional(),
-  
+
   fixed_fee_amount: z.coerce.number().min(0).optional(),
-  
+
   services_commissions: z.array(z.object({
     service_id: z.string().uuid("ID do serviço inválido"),
     commission_percentage: z.coerce.number().min(0, "A comissão não pode ser negativa").max(100, "A comissão não pode passar de 100%")

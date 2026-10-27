@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useForm, SubmitHandler, Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Plus, Scissors, CheckCircle2, XCircle, Camera, Trash, Save } from "lucide-react";
+import { Loader2, Plus, Scissors, CheckCircle2, XCircle, Camera, Trash, Save, Copy, Mail, RefreshCw, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import Image from "next/image";
 
@@ -36,6 +36,39 @@ interface Servico {
   name: string;
 }
 
+interface StaffInvitationSummary {
+  id: string;
+  invited_email: string;
+  status: "pending" | "accepted" | "expired" | "revoked";
+  expires_at: string;
+  accepted_at?: string | null;
+  revoked_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  link_type?: "invite" | "magiclink";
+}
+
+interface StaffInvitationListResponse {
+  invitations?: StaffInvitationSummary[];
+  error?: string;
+}
+
+interface StaffInvitationCreateResponse {
+  success?: boolean;
+  invitationUrl?: string;
+  invitation?: {
+    id: string;
+    staffId: string;
+    invitedEmail: string;
+    status: "pending" | "accepted" | "expired" | "revoked";
+    linkType: "invite" | "magiclink";
+    expiresAt: string;
+    renewed: boolean;
+  };
+  message?: string;
+  error?: string;
+}
+
 const defaultFormValues: StaffFormValues = {
   barbershop_id: "",
   full_name: "",
@@ -43,6 +76,7 @@ const defaultFormValues: StaffFormValues = {
   cnpj: "",
   birth_date: "",
   role: "barber",
+  access_email: "",
   address: { cep: "", rua: "", numero: "", bairro: "", cidade: "" },
   education_level: "",
   barber_courses: "",
@@ -60,6 +94,14 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
   const [fetchingCep, setFetchingCep] = useState(false);
   const [barbershopId, setBarbershopId] = useState<string | null>(null);
   const [services, setServices] = useState<Servico[]>([]);
+  const [newlyCreatedStaffId, setNewlyCreatedStaffId] = useState<string | null>(null);
+  const [registrationSaved, setRegistrationSaved] = useState(false);
+  const [invitations, setInvitations] = useState<StaffInvitationSummary[]>([]);
+  const [isLoadingInvitations, setIsLoadingInvitations] = useState(false);
+  const [isGeneratingInvitation, setIsGeneratingInvitation] = useState(false);
+  const [generatedInvitationUrl, setGeneratedInvitationUrl] = useState<string | null>(null);
+  const [originalInvitationEmail, setOriginalInvitationEmail] = useState("");
+  const [staffProfileLinked, setStaffProfileLinked] = useState(false);
 
   // Estados da Foto de Perfil
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -68,6 +110,8 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
 
   const supabase = createClient();
   const isEditing = !!staffIdToEdit;
+  const activeStaffId = staffIdToEdit || newlyCreatedStaffId;
+  const latestInvitation = invitations[0] ?? null;
 
   const form = useForm<StaffFormValues>({
     resolver: zodResolver(staffFormSchema) as unknown as Resolver<StaffFormValues>,
@@ -75,6 +119,7 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
     defaultValues: defaultFormValues,
   });
 
+  const invitationEmail = (form.watch("access_email") || "").trim().toLowerCase();
   const paymentModel = form.watch("payment_model");
   const commissionType = form.watch("commission_type");
   
@@ -89,11 +134,77 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
   const isCnpjFull = cleanCnpj.length === 14;
   const isCnpjValid = isCnpjFull ? isValidCNPJ(cleanCnpj) : false;
 
+  const loadInvitations = useCallback(async (staffId: string, showLoading = true) => {
+    if (showLoading) setIsLoadingInvitations(true);
+    try {
+      const response = await fetch(
+        `/api/staff/invitations?staffId=${encodeURIComponent(staffId)}`,
+        { method: "GET", credentials: "same-origin", cache: "no-store" }
+      );
+      const result = (await response.json().catch(() => ({}))) as StaffInvitationListResponse;
+      if (!response.ok) {
+        throw new Error(result.error || "Não foi possível consultar o histórico de convites.");
+      }
+      const invitationList = result.invitations ?? [];
+      setInvitations(invitationList);
+      return invitationList;
+    } finally {
+      if (showLoading) setIsLoadingInvitations(false);
+    }
+  }, []);
+
+  const generateInvitation = useCallback(async (staffId: string, email: string) => {
+    setIsGeneratingInvitation(true);
+    setGeneratedInvitationUrl(null);
+    try {
+      const response = await fetch("/api/staff/invitations", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId, email: email.trim().toLowerCase() }),
+      });
+      const result = (await response.json().catch(() => ({}))) as StaffInvitationCreateResponse;
+      if (!response.ok || !result.success || !result.invitationUrl) {
+        throw new Error(result.error || "Não foi possível gerar o link de acesso.");
+      }
+
+      setGeneratedInvitationUrl(result.invitationUrl);
+      setOriginalInvitationEmail(email.trim().toLowerCase());
+      try {
+        await loadInvitations(staffId, false);
+      } catch (refreshError) {
+        console.error("Erro ao atualizar a lista de convites após geração:", refreshError);
+      }
+      return result;
+    } finally {
+      setIsGeneratingInvitation(false);
+    }
+  }, [loadInvitations]);
+
+  const copyInvitationLink = async () => {
+    if (!generatedInvitationUrl) return;
+    try {
+      await navigator.clipboard.writeText(generatedInvitationUrl);
+      toast.success("Link copiado. Envie-o manualmente ao profissional.");
+    } catch (error) {
+      console.error("Erro ao copiar o link do convite:", error);
+      toast.error("Não foi possível copiar automaticamente. Selecione e copie o link exibido.");
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) {
       form.reset(defaultFormValues);
       setAvatarFile(null);
       setAvatarPreview(null);
+      setNewlyCreatedStaffId(null);
+      setRegistrationSaved(false);
+      setInvitations([]);
+      setIsLoadingInvitations(false);
+      setIsGeneratingInvitation(false);
+      setGeneratedInvitationUrl(null);
+      setOriginalInvitationEmail("");
+      setStaffProfileLinked(false);
       return;
     }
 
@@ -129,6 +240,20 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
 
           const { data: commissions } = await supabase.from("staff_service_commissions").select("*").eq("staff_id", staffIdToEdit);
 
+          let invitationList: StaffInvitationSummary[] = [];
+          try {
+            invitationList = await loadInvitations(staffIdToEdit, false);
+          } catch (invitationLoadError) {
+            console.error("Erro ao carregar histórico de convites:", invitationLoadError);
+            toast.error("Não foi possível carregar o histórico de convites deste profissional.");
+          }
+          const latestInvitationData = invitationList[0] ?? null;
+          setOriginalInvitationEmail(latestInvitationData?.invited_email?.trim().toLowerCase() ?? "");
+          setStaffProfileLinked(Boolean(staffData.profile_id));
+          setGeneratedInvitationUrl(null);
+          setNewlyCreatedStaffId(null);
+          setRegistrationSaved(false);
+
           if (staffData.avatar_url) setAvatarPreview(staffData.avatar_url);
 
           // Verifica se a comissão é global (todas iguais) ou específica
@@ -140,6 +265,7 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
             barbershop_id: currentBarbershopId,
             full_name: staffData.full_name,
             role: staffData.role,
+            access_email: latestInvitationData?.invited_email || "",
             cpf: staffData.cpf || "",
             cnpj: staffData.cnpj || "",
             birth_date: staffData.birth_date || "",
@@ -158,8 +284,17 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
           });
         } else {
           // Se for cadastro novo, inicializa barbearia e serviços vazios
-          form.setValue("barbershop_id", currentBarbershopId);
-          form.setValue("services_commissions", servicesData?.map((s) => ({ service_id: s.id, commission_percentage: 0 })) || []);
+          setNewlyCreatedStaffId(null);
+          setRegistrationSaved(false);
+          setInvitations([]);
+          setGeneratedInvitationUrl(null);
+          setOriginalInvitationEmail("");
+          setStaffProfileLinked(false);
+          form.reset({
+            ...defaultFormValues,
+            barbershop_id: currentBarbershopId,
+            services_commissions: servicesData?.map((s) => ({ service_id: s.id, commission_percentage: 0 })) || [],
+          });
         }
       } catch (error) {
         console.error("Erro ao carregar dados:", error);
@@ -170,7 +305,7 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
     }
 
     loadData();
-  }, [isOpen, isEditing, staffIdToEdit, supabase, form]);
+  }, [isOpen, isEditing, staffIdToEdit, supabase, form, loadInvitations]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -225,7 +360,7 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
       }
 
       throw new Error("CEP não encontrado.");
-    } catch (error) {
+    } catch {
       toast.error("CEP não localizado. Preencha o endereço manualmente.");
     } finally {
       setFetchingCep(false);
@@ -239,43 +374,128 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
     }
 
     setLoading(true);
-    const toastId = toast.loading(isEditing ? "Atualizando profissional..." : "A registrar profissional...");
+    const hasSavedStaff = Boolean(staffIdToEdit || newlyCreatedStaffId);
+    const toastId = toast.loading(hasSavedStaff ? "Salvando alterações do profissional..." : "Registrando profissional...");
 
     try {
       const payload: StaffFormValues = { ...data, barbershop_id: barbershopId };
+      const accessEmail = (payload.access_email || "").trim().toLowerCase();
 
       if (payload.payment_model === "commission" && payload.commission_type === "global") {
-        payload.services_commissions = services.map(s => ({
-          service_id: s.id,
-          commission_percentage: payload.global_commission || 0
+        payload.services_commissions = services.map((service) => ({
+          service_id: service.id,
+          commission_percentage: payload.global_commission || 0,
         }));
       }
 
+      // O e-mail de acesso pertence ao fluxo de convite, não à tabela staff.
+      // O profile_id enviado pelo navegador também não deve ser usado para vincular contas.
+      const staffPayload = { ...payload };
+      delete staffPayload.access_email;
+      delete staffPayload.profile_id;
       const formData = new FormData();
-      formData.append("data", JSON.stringify(payload));
-      if (avatarFile) {
-        formData.append("avatar", avatarFile);
-      }
+      formData.append("data", JSON.stringify(staffPayload));
+      if (avatarFile) formData.append("avatar", avatarFile);
 
-      const url = isEditing ? `/api/staff?id=${staffIdToEdit}` : "/api/staff";
-      const method = isEditing ? "PUT" : "POST";
-
-      const response = await fetch(url, {
-        method,
-        body: formData,
-      });
-
+      const currentStaffId = staffIdToEdit || newlyCreatedStaffId;
+      const url = currentStaffId ? `/api/staff?id=${currentStaffId}` : "/api/staff";
+      const method = currentStaffId ? "PUT" : "POST";
+      const response = await fetch(url, { method, body: formData });
       const result = await response.json();
 
-      if (!response.ok) throw new Error(result.error || "Ocorreu um erro ao salvar os dados.");
+      if (!response.ok) {
+        throw new Error(result.error || "Ocorreu um erro ao salvar os dados.");
+      }
 
-      toast.success(isEditing ? "Ficha atualizada com sucesso!" : "Profissional registrado com sucesso!", { id: toastId });
+      const savedStaffId = currentStaffId || result.data?.id;
+      if (!savedStaffId) {
+        throw new Error("O cadastro foi processado, mas a API não retornou o identificador do profissional.");
+      }
+
+      if (!currentStaffId) {
+        setNewlyCreatedStaffId(savedStaffId);
+        setRegistrationSaved(true);
+        onSuccess();
+      }
+
+      const previousEmail = originalInvitationEmail.trim().toLowerCase();
+      const emailNeedsInvitation = accessEmail.length > 0 && accessEmail !== previousEmail;
+
+      if (emailNeedsInvitation) {
+        try {
+          const invitationResult = await generateInvitation(savedStaffId, accessEmail);
+          toast.success(
+            invitationResult.invitation?.renewed
+              ? "Cadastro salvo e link de convite renovado. Copie e envie o link manualmente."
+              : "Cadastro salvo e convite gerado. Copie e envie o link manualmente.",
+            { id: toastId }
+          );
+          onSuccess();
+          return;
+        } catch (invitationError: unknown) {
+          const invitationMessage = invitationError instanceof Error
+            ? invitationError.message
+            : "Erro desconhecido ao gerar o convite.";
+          toast.error(
+            `O cadastro foi salvo, mas o convite não foi gerado: ${invitationMessage}. Corrija o e-mail ou tente gerar o convite novamente abaixo.`,
+            { id: toastId, duration: 8000 }
+          );
+          onSuccess();
+          return;
+        }
+      }
+
+      if (!accessEmail && !currentStaffId) {
+        toast.success(
+          "Profissional cadastrado. Informe o e-mail de acesso e gere o convite na seção abaixo.",
+          { id: toastId, duration: 7000 }
+        );
+        onSuccess();
+        return;
+      }
+
+      toast.success("Ficha atualizada com sucesso!", { id: toastId });
       onOpenChange(false);
-      onSuccess(); 
+      onSuccess();
     } catch (error: unknown) {
-      if (error instanceof Error) toast.error(error.message, { id: toastId });
+      if (error instanceof Error) {
+        toast.error(error.message, { id: toastId });
+      } else {
+        toast.error("Ocorreu um erro ao salvar os dados.", { id: toastId });
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerateInvitation = async () => {
+    const staffId = staffIdToEdit || newlyCreatedStaffId;
+    const email = invitationEmail;
+
+    if (!staffId) {
+      toast.error("Salve o cadastro do profissional antes de gerar o convite.");
+      return;
+    }
+    if (!email) {
+      form.setError("access_email", { type: "manual", message: "Informe o e-mail de acesso antes de gerar o convite." });
+      return;
+    }
+    if (staffProfileLinked || latestInvitation?.status === "accepted") {
+      toast.error("Este profissional já está vinculado a uma conta. Para alterar o e-mail de uma conta ativa, é necessário um fluxo específico de alteração de conta.");
+      return;
+    }
+
+    try {
+      const result = await generateInvitation(staffId, email);
+      form.clearErrors("access_email");
+      toast.success(
+        result.invitation?.renewed
+          ? "Link renovado. Copie e envie manualmente ao profissional."
+          : "Link de convite gerado. Copie e envie manualmente ao profissional."
+      );
+      onSuccess();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível gerar o convite.");
     }
   };
 
@@ -284,12 +504,14 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
       <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto w-full p-6">
         <DialogHeader className="mb-4">
           <DialogTitle className="text-2xl font-black">
-            {isEditing ? "Editar Profissional" : "Registrar Profissional"}
+            {isEditing || registrationSaved ? "Editar Profissional" : "Registrar Profissional"}
           </DialogTitle>
           <DialogDescription>
-            {isEditing 
-              ? "Atualize as configurações e dados do integrante da equipe." 
-              : "Preencha a ficha completa do novo barbeiro, gerente ou recepcionista da equipe."}
+            {isEditing
+              ? "Atualize os dados do integrante da equipe e gerencie seu convite de acesso."
+              : registrationSaved
+                ? "O cadastro foi salvo. Confira o e-mail e o estado do convite antes de fechar esta janela."
+                : "Preencha a ficha completa do novo barbeiro, gerente ou recepcionista da equipe."}
           </DialogDescription>
         </DialogHeader>
 
@@ -622,13 +844,142 @@ export function StaffFormDialog({ isOpen, onOpenChange, staffIdToEdit, onSuccess
                 )}
               </div>
 
+              {/* SESSÃO 5: ACESSO À ÁREA PROFISSIONAL */}
+              <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+                    <Mail className="size-5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-bold text-slate-900">5. Acesso à Área Profissional</h3>
+                    <p className="mt-1 text-sm leading-5 text-slate-600">
+                      Informe o e-mail que o profissional usará para ativar a conta. O link será gerado pelo sistema e enviado manualmente por você; nenhum e-mail automático será enviado nesta versão.
+                    </p>
+                  </div>
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name="access_email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>E-mail de acesso</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="email"
+                          autoComplete="email"
+                          placeholder="profissional@exemplo.com"
+                          {...field}
+                          value={field.value || ""}
+                          disabled={staffProfileLinked || latestInvitation?.status === "accepted"}
+                          onChange={(event) => {
+                            field.onChange(event.target.value.toLowerCase());
+                            setGeneratedInvitationUrl(null);
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                      {(staffProfileLinked || latestInvitation?.status === "accepted") && (
+                        <p className="text-xs leading-5 text-amber-700">
+                          Este profissional já está vinculado a uma conta. A alteração do e-mail de uma conta ativa exige um fluxo separado.
+                        </p>
+                      )}
+                    </FormItem>
+                  )}
+                />
+
+                {activeStaffId ? (
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-800">Estado do convite</p>
+                      {isLoadingInvitations ? (
+                        <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Consultando...
+                        </span>
+                      ) : staffProfileLinked ? (
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800">Conta vinculada</span>
+                      ) : latestInvitation ? (
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                          latestInvitation.status === "accepted"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : latestInvitation.status === "pending"
+                              ? "bg-blue-100 text-blue-800"
+                              : latestInvitation.status === "expired"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-slate-100 text-slate-700"
+                        }`}>
+                          {latestInvitation.status === "accepted"
+                            ? "Aceito"
+                            : latestInvitation.status === "pending"
+                              ? "Pendente"
+                              : latestInvitation.status === "expired"
+                                ? "Expirado"
+                                : "Revogado"}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">Sem convite</span>
+                      )}
+                    </div>
+
+                    {latestInvitation && (
+                      <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p className="break-words">E-mail convidado: <span className="font-medium text-slate-800">{latestInvitation.invited_email}</span></p>
+                        <p className="inline-flex items-center gap-1.5"><Clock3 className="size-3.5 shrink-0" aria-hidden="true" />Validade: <span className="font-medium text-slate-800">{new Date(latestInvitation.expires_at).toLocaleString("pt-BR")}</span></p>
+                        {latestInvitation.accepted_at && (
+                          <p className="sm:col-span-2">Aceito em: <span className="font-medium text-slate-800">{new Date(latestInvitation.accepted_at).toLocaleString("pt-BR")}</span></p>
+                        )}
+                      </div>
+                    )}
+
+                    {!staffProfileLinked && latestInvitation?.status !== "accepted" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full sm:w-auto"
+                        disabled={loading || isGeneratingInvitation || isLoadingInvitations || !invitationEmail}
+                        onClick={() => void handleGenerateInvitation()}
+                      >
+                        {isGeneratingInvitation ? (
+                          <><Loader2 className="mr-2 size-4 animate-spin" aria-hidden="true" /> Gerando link...</>
+                        ) : (
+                          <><RefreshCw className="mr-2 size-4" aria-hidden="true" /> {latestInvitation?.status === "pending" ? "Gerar / renovar link" : "Gerar link de convite"}</>
+                        )}
+                      </Button>
+                    ) : null}
+
+                    {generatedInvitationUrl && (
+                      <div className="space-y-2 border-t border-slate-100 pt-3">
+                        <p className="text-sm font-semibold text-emerald-800">Link pronto para envio manual</p>
+                        <p className="text-xs leading-5 text-slate-600">Copie o link agora e envie ao profissional. Por segurança, ele não será armazenado para ser exibido novamente depois que esta janela for fechada.</p>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Input
+                            value={generatedInvitationUrl}
+                            readOnly
+                            aria-label="Link do convite de acesso profissional"
+                            onFocus={(event) => event.currentTarget.select()}
+                            className="min-w-0 bg-slate-50 text-xs"
+                          />
+                          <Button type="button" onClick={() => void copyInvitationLink()} className="shrink-0">
+                            <Copy className="mr-2 size-4" aria-hidden="true" /> Copiar link
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-slate-300 bg-white p-3 text-xs leading-5 text-slate-600">
+                    Salve o cadastro primeiro. Depois disso, você poderá gerar ou renovar o convite e copiar o link para enviar manualmente.
+                  </p>
+                )}
+              </div>
+
               <Separator />
 
               <div className="flex justify-end gap-3 pt-2">
-                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancelar</Button>
-                <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white shadow-md">
-                  {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : (isEditing ? <Save className="size-4 mr-2" /> : <Plus className="size-4 mr-2" />)}
-                  {isEditing ? "Salvar Alterações" : "Concluir Registro"}
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading || isGeneratingInvitation}>Fechar</Button>
+                <Button type="submit" disabled={loading || isGeneratingInvitation} className="bg-blue-600 hover:bg-blue-700 text-white shadow-md">
+                  {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : (isEditing || registrationSaved ? <Save className="size-4 mr-2" /> : <Plus className="size-4 mr-2" />)}
+                  {isEditing || registrationSaved ? "Salvar Alterações" : "Concluir Registro"}
                 </Button>
               </div>
             </form>

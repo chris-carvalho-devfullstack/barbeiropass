@@ -36,13 +36,20 @@ interface SaleRecord {
   created_at: string;
   quantity: number;
   unit_price: number;
+  product_name_snapshot: string | null;
+  product_sku_snapshot: string | null;
 }
 
 // Tipagem para a resposta bruta do Supabase ao buscar pedidos
 interface RawOrder {
   id: string;
   created_at: string;
-  pos_order_items: { quantity: number; unit_price: number }[];
+  pos_order_items: {
+    quantity: number;
+    unit_price: number;
+    product_name_snapshot: string | null;
+    product_sku_snapshot: string | null;
+  }[];
 }
 
 type SalesFilterType = 'hoje' | 'semana' | 'mes' | 'todos';
@@ -119,7 +126,14 @@ export default function AjusteEstoquePage({ params }: { params: Promise<{ id: st
       .select(`
         id,
         created_at,
-        pos_order_items!inner(id, product_id, quantity, unit_price)
+        pos_order_items!inner(
+          id,
+          product_id,
+          quantity,
+          unit_price,
+          product_name_snapshot,
+          product_sku_snapshot
+        )
       `)
       .eq('pos_order_items.product_id', productId)
       .order('created_at', { ascending: false })
@@ -146,6 +160,8 @@ export default function AjusteEstoquePage({ params }: { params: Promise<{ id: st
         created_at: order.created_at,
         quantity: order.pos_order_items[0]?.quantity || 0,
         unit_price: order.pos_order_items[0]?.unit_price || 0,
+        product_name_snapshot: order.pos_order_items[0]?.product_name_snapshot ?? null,
+        product_sku_snapshot: order.pos_order_items[0]?.product_sku_snapshot ?? null,
       }));
 
       setSales(prev => reset ? formattedSales : [...prev, ...formattedSales]);
@@ -390,9 +406,16 @@ export default function AjusteEstoquePage({ params }: { params: Promise<{ id: st
                       <div className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
                         <ShoppingCart className="w-4 h-4" />
                       </div>
-                      <div>
-                        <p className="font-semibold text-sm text-gray-900">Venda PDV</p>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm text-gray-900 truncate">
+                          {sale.product_name_snapshot || product.name}
+                        </p>
                         <p className="text-xs text-gray-500">{formatDate(sale.created_at)}</p>
+                        {sale.product_sku_snapshot && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            SKU: {sale.product_sku_snapshot}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">

@@ -95,8 +95,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
     }
 
-    // Revalida a disponibilidade no servidor antes de aceitar uma nova entrada.
-    // A regra do cliente é apenas visual; esta verificação impede chamadas diretas à API.
+    // Revalida disponibilidade no servidor antes de aceitar nova entrada.
     const queueState = await calculateSupabaseQueueWaitTimes({
       barbershopId: barbershop.id,
       timeZone: "America/Sao_Paulo",
@@ -117,10 +116,7 @@ export async function POST(request: Request) {
               : "Não há disponibilidade para novas entradas na fila no momento.";
 
       return NextResponse.json(
-        {
-          error: availabilityMessage,
-          availabilityStatus,
-        },
+        { error: availabilityMessage, availabilityStatus },
         { status: 409 }
       );
     }
@@ -200,7 +196,7 @@ export async function POST(request: Request) {
     const { data: existingTicket, error: duplicateError } = await duplicateQuery.maybeSingle();
 
     if (duplicateError) {
-      console.error("ERRO SUPABASE (duplicateQuery):", duplicateError); 
+      console.error("ERRO SUPABASE (duplicateQuery):", duplicateError);
       throw new Error("Não foi possível validar a fila atual.");
     }
 
@@ -224,7 +220,9 @@ export async function POST(request: Request) {
       client_id: customer.id,
       client_auth_id: user?.id ?? null,
       client_name: customer.name,
-      barber_id: barberId ?? null,
+      // Preferência é preservada separadamente; barber_id só é preenchido ao assumir.
+      preferred_barber_id: barberId ?? null,
+      barber_id: null,
       is_authenticated: Boolean(user),
       status: "waiting",
     });
@@ -254,7 +252,7 @@ export async function POST(request: Request) {
         entityId: customer.id,
         eventType: "QUEUE_ENTERED",
         performedBy: user?.id ?? null,
-        payload: { queueId, source: "PUBLIC_QUEUE" },
+        payload: { queueId, source: "PUBLIC_QUEUE", preferredBarberId: barberId ?? null },
       });
     } catch (eventError) {
       await admin

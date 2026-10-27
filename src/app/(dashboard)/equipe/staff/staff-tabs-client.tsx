@@ -42,6 +42,8 @@ export interface ReceiptItem {
   unit_price: number;
   commission_amount: number;
   item_type: string;
+  product_name_snapshot: string | null;
+  product_sku_snapshot: string | null;
   services: { name: string } | null;
   products: { name: string } | null;
   staff: { full_name: string } | null;
@@ -452,9 +454,16 @@ export function StaffTabsClient({ staffId, isManager, agendaNode }: StaffTabsCli
                           </div>
                           <div>
                             <p className="font-bold text-slate-900 text-sm">
-                              {item.item_type === 'product' ? item.products?.name : item.services?.name}
+                              {item.item_type === 'product'
+                                ? item.product_name_snapshot || item.products?.name || "Produto sem nome"
+                                : item.services?.name || "Serviço sem nome"}
                             </p>
                             <div className="flex items-center flex-wrap gap-2 mt-1.5">
+                              {item.item_type === 'product' && item.product_sku_snapshot && (
+                                <span className="text-xs font-medium text-slate-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded">
+                                  SKU: {item.product_sku_snapshot}
+                                </span>
+                              )}
                               <span className="text-xs font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                                 {item.quantity}x R$ {Number(item.unit_price).toFixed(2)}
                               </span>
