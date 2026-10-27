@@ -15,7 +15,6 @@ import {
   type PublicQueueAvailabilityStatusCode,
 } from "@/infrastructure/database/supabase/SupabaseQueueWaitTimeService";
 
-// 1. ZOD SCHEMA RIGOROSO
 const joinQueueSchema = z.object({
   barbershopId: z.string().uuid("ID da barbearia inválido."),
   turnstileToken: z.string().min(1, "Token de segurança inválido."),
@@ -46,16 +45,19 @@ function getPublicQueueUnavailableMessage(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-
     const parsed = joinQueueSchema.safeParse(body);
+
     if (!parsed.success) {
       console.error("Tentativa de manipulação de payload (Zod):", parsed.error.flatten());
-      return NextResponse.json({ error: "Dados inválidos. Verifique as informações preenchidas." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Dados inválidos. Verifique as informações preenchidas." },
+        { status: 400 }
+      );
     }
 
     const { barbershopId, turnstileToken, barberId, clientName, phone, email, cpf } = parsed.data;
 
-    // 2. VALIDAÇÃO TURNSTILE COM BYPASS PARA LOCALHOST
+    // Validação Turnstile, mantendo o bypass exclusivo do ambiente de desenvolvimento.
     const isDevelopment = process.env.NODE_ENV === 'development';
 
     if (!isDevelopment && turnstileToken !== "bypass_for_localhost") {
@@ -74,7 +76,6 @@ export async function POST(req: Request) {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: formData.toString(),
       });
-
       const turnstileData = await turnstileRes.json();
 
       if (!turnstileData.success) {
@@ -83,15 +84,17 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. IDENTIFICAÇÃO DO USUÁRIO
+    // Identificação do usuário autenticado, quando existir.
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user && !clientName) {
-      return NextResponse.json({ error: "Para entrar na fila sem conta, é obrigatório informar o seu nome." }, { status: 401 });
+      return NextResponse.json(
+        { error: "Para entrar na fila sem conta, é obrigatório informar o seu nome." },
+        { status: 401 }
+      );
     }
 
-    // 4. VERIFICAÇÃO DE USUÁRIO BANIDO
     if (user) {
       const { data: isBanned } = await supabase
         .from("banned_users")
@@ -101,31 +104,50 @@ export async function POST(req: Request) {
         .maybeSingle();
 
       if (isBanned) {
-        return NextResponse.json({ error: "Acesso bloqueado por violação das políticas da barbearia." }, { status: 403 });
+        return NextResponse.json(
+          { error: "Acesso bloqueado por violação das políticas da barbearia." },
+          { status: 403 }
+        );
       }
     }
 
-    // =========================================================================
-    // MODO ADMIN: Service Role para contornar RLS
-    // =========================================================================
+    // O Admin Client é usado apenas no servidor para operações CRM e validações públicas.
     const supabaseAdmin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // 5. VALIDAÇÃO DA POLÍTICA DE ACEITAÇÃO DA FILA PÚBLICA
-    // Esta rota representa a entrada pública de clientes. A verificação é
-    // feita antes de criar/atualizar o cliente no CRM, para não gerar registros
-    // de clientes quando a fila não pode aceitar a entrada.
-    // A política "accept_until_closing" permite projetar a fila para além do
-    // fechamento, mas a barbearia e os profissionais elegíveis precisam estar
-    // disponíveis no momento da entrada. A política restritiva também exige
-    // capacidade no expediente atual, conforme calculado pelo serviço.
+    // A preferência precisa apontar para um profissional ativo da mesma barbearia.
+    // Ela será salva em preferred_barber_id; barber_id só é preenchido ao iniciar atendimento.
+    if (barberId) {
+      const { data: preferredBarber, error: preferredBarberError } = await supabaseAdmin
+        .from("staff")
+        .select("id")
+        .eq("id", barberId)
+        .eq("barbershop_id", barbershopId)
+        .eq("role", "barber")
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (preferredBarberError) {
+        console.error("[QUEUE_PREFERRED_BARBER_LOOKUP_ERROR]", preferredBarberError);
+        return NextResponse.json({ error: "Não foi possível validar o profissional escolhido." }, { status: 500 });
+      }
+
+      if (!preferredBarber) {
+        return NextResponse.json(
+          { error: "O profissional escolhido não está ativo ou não pertence a esta barbearia." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Verifica se a fila pública pode receber novas entradas antes de criar registros no CRM.
     const queueWaitTimeResult = await calculateSupabaseQueueWaitTimes({
       barbershopId,
       includePublicPreview: true,
     });
-
     const publicAvailability = queueWaitTimeResult.publicAvailability;
 
     if (publicAvailability.status !== "available") {
@@ -146,7 +168,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 6. INTEGRAÇÃO COM O NOVO CRM (Smart Merge usando Admin Client)
+    // Integração com CRM usando o contexto da barbearia.
     const context = {
       tenantId: barbershopId,
       userId: user?.id || null,
@@ -172,12 +194,12 @@ export async function POST(req: Request) {
       createdFrom: "QUEUE",
     });
 
-    // 7. PREVENÇÃO DE DUPLICATAS NA FILA VIRTUAL
+    // Impede duplicar a mesma pessoa na fila, autenticada ou avulsa.
     let queueQuery = supabaseAdmin
       .from("virtual_queue")
       .select("id")
       .eq("barbershop_id", barbershopId)
-      .in("status", ["waiting", "serving"]);
+      .in("status", ["waiting", "serving", "in_progress"]);
 
     if (user) {
       queueQuery = queueQuery.eq("client_auth_id", user.id);
@@ -185,7 +207,12 @@ export async function POST(req: Request) {
       queueQuery = queueQuery.eq("client_name", customer.name).is("client_auth_id", null);
     }
 
-    const { data: alreadyInQueue } = await queueQuery.maybeSingle();
+    const { data: alreadyInQueue, error: existingQueueError } = await queueQuery.maybeSingle();
+
+    if (existingQueueError) {
+      console.error("[QUEUE_DUPLICATE_LOOKUP_ERROR]", existingQueueError);
+      return NextResponse.json({ error: "Não foi possível verificar sua posição na fila." }, { status: 500 });
+    }
 
     if (alreadyInQueue) {
       return NextResponse.json({ error: "Você já está na lista de espera." }, { status: 409 });
@@ -193,49 +220,51 @@ export async function POST(req: Request) {
 
     const formatPublicName = (fullName: string) => {
       const parts = fullName.trim().split(" ");
-      if (parts.length > 1) {
-        return `${parts[0]} ${parts[parts.length - 1][0]}.`;
-      }
+      if (parts.length > 1) return `${parts[0]} ${parts[parts.length - 1][0]}.`;
       return parts[0];
     };
     const safePublicName = formatPublicName(customer.name);
 
-    // 8. INSERÇÃO NA TABELA DE FILA VIRTUAL COM RETORNO DO ID DA FILA
+    // Preserva a preferência do cliente separada do barbeiro que efetivamente atenderá.
     const { data: insertedQueue, error: insertError } = await supabaseAdmin
       .from("virtual_queue")
       .insert({
         barbershop_id: barbershopId,
+        client_id: customer.id,
         client_auth_id: user?.id || null,
         client_name: safePublicName,
-        barber_id: barberId || null,
+        barber_id: null,
+        preferred_barber_id: barberId || null,
+        barber_name: null,
         is_authenticated: !!user,
         turnstile_token_used: turnstileToken,
         status: "waiting",
       })
       .select("id")
-      .single(); // <-- ESSENCIAL: Retorna a linha gravada
+      .single();
 
     if (insertError) {
       console.error("Falha ao inserir na tabela virtual_queue:", insertError);
       return NextResponse.json({ error: "Erro ao registar a sua posição na fila." }, { status: 500 });
     }
 
-    // 9. AUDITORIA E TIMELINE
     await eventService.logEvent(context, {
       entityType: 'QUEUE',
       entityId: customer.id,
       eventType: 'QUEUE_ENTERED',
       payload: {
-        barberId: barberId || "Sem Preferência",
+        preferredBarberId: barberId || null,
         isAuthenticated: !!user,
         source: "VIRTUAL_QUEUE_PUBLIC_LINK",
-        providedPhone: cleanPhone
-      }
+        providedPhone: cleanPhone,
+      },
     });
 
-    // RETORNA O queueId PARA O FRONTEND CONSEGUIR LIGAR O "ACOMPANHAMENTO AO VIVO"
-    return NextResponse.json({ success: true, customerId: customer.id, queueId: insertedQueue.id });
-
+    return NextResponse.json({
+      success: true,
+      customerId: customer.id,
+      queueId: insertedQueue.id,
+    });
   } catch (err) {
     console.error("[JOIN QUEUE API CATCH ERROR]", err);
     return NextResponse.json({ error: "Erro fatal no servidor de fila." }, { status: 500 });

@@ -5,6 +5,7 @@
 
 
 import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 
 import { revalidatePath } from "next/cache";
 
@@ -46,10 +47,8 @@ export async function joinQueueAction(data: {
 
       client_id: data.client_id || null,
 
-      // Novas entradas registram a preferência separadamente do responsável.
-      preferred_barber_id: data.barber_id || null,
-
       barber_id: null,
+      preferred_barber_id: data.barber_id || null,
 
       status: 'waiting'
 
@@ -68,7 +67,8 @@ export async function joinQueueAction(data: {
 
 
   revalidatePath("/fila");
-
+  revalidatePath("/profissional/fila");
+  revalidatePath("/profissional");
   revalidatePath("/pdv");
 
   revalidatePath("/b/[slug]", "page");
@@ -81,12 +81,61 @@ export async function joinQueueAction(data: {
 
 
 
-// 2. Atualizar Status (Para uso interno da Barbearia - ZERO TRUST)
+// Recupera somente os nomes de profissionais vinculados à barbearia do usuário.
+// Usa a sessão para autorização e o cliente administrativo apenas para contornar a RLS
+// que impede um barbeiro de consultar o nome dos demais profissionais da própria equipe.
+export async function getQueueStaffNamesAction(barbershopId: string, staffIds: string[]) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
 
-type QueueStartConfirmations = {
-  clientAcceptedDifferentBarber?: boolean;
-  confirmedOutOfOrder?: boolean;
-};
+  if (authError || !user) {
+    return { error: "Não autorizado." };
+  }
+
+  const { data: member, error: memberError } = await supabase
+    .from("barbershop_members")
+    .select("barbershop_id, role")
+    .eq("profile_id", user.id)
+    .eq("barbershop_id", barbershopId)
+    .maybeSingle();
+
+  if (memberError || !member || !["owner", "manager", "barber", "receptionist"].includes(member.role)) {
+    return { error: "Você não tem acesso aos profissionais desta barbearia." };
+  }
+
+  const safeStaffIds = Array.from(new Set(
+    (Array.isArray(staffIds) ? staffIds : [])
+      .filter((staffId): staffId is string => typeof staffId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(staffId))
+  )).slice(0, 100);
+
+  if (safeStaffIds.length === 0) {
+    return { staffNames: {} as Record<string, string> };
+  }
+
+  const admin = createAdminClient();
+  const { data: staffRecords, error: staffRecordsError } = await admin
+    .from("staff")
+    .select("id, full_name")
+    .eq("barbershop_id", member.barbershop_id)
+    .in("id", safeStaffIds);
+
+  if (staffRecordsError || !staffRecords) {
+    console.error("[QUEUE_STAFF_NAMES_LOOKUP_ERROR]", staffRecordsError);
+    return { error: "Não foi possível carregar os nomes dos profissionais." };
+  }
+
+  const staffNames = Object.fromEntries(
+    staffRecords.map((staffRecord) => [staffRecord.id, staffRecord.full_name])
+  ) as Record<string, string>;
+
+  return { staffNames };
+}
+
+
+// 2. Atualizar Status (Para uso interno da Barbearia - ZERO TRUST)
 
 export async function updateQueueStatusAction(
 
@@ -95,11 +144,11 @@ export async function updateQueueStatusAction(
   status: string, 
 
   barberId?: string,
-
   serviceIds?: string[],
-
-  confirmations?: QueueStartConfirmations
-
+  confirmations?: {
+    clientAcceptedPreferenceChange?: boolean;
+    outOfOrderConfirmed?: boolean;
+  }
 ) {
 
   const supabase = await createClient();
@@ -148,7 +197,9 @@ export async function updateQueueStatusAction(
 
   }
 
-  if (!['owner', 'manager', 'barber'].includes(member.role)) {
+
+
+  if (!["owner", "manager", "barber", "receptionist"].includes(member.role)) {
     return { error: "Seu perfil não tem permissão para operar a fila." };
   }
 
@@ -194,7 +245,7 @@ export async function updateQueueStatusAction(
 
     .from("virtual_queue")
 
-    .select("id, barbershop_id, status, joined_at, client_name, barber_id, preferred_barber_id")
+    .select("id, barbershop_id, status, joined_at, preferred_barber_id, barber_id")
 
     .eq("id", id)
 
@@ -217,31 +268,25 @@ export async function updateQueueStatusAction(
 
 
   const currentStatus = queueItem.status;
+  // Registros legados guardavam a preferência em barber_id enquanto aguardavam.
+  const effectivePreferredBarberId = queueItem.preferred_barber_id ??
+    (currentStatus === "waiting" ? queueItem.barber_id : null);
 
-  if (member.role === "barber" && status === "cancelled") {
-    return { error: "O profissional não pode remover clientes da fila. Solicite apoio à administração." };
-  }
 
-  if (member.role === "barber" && status === "awaiting_payment") {
-    const { data: ownStaff, error: ownStaffError } = await supabase
-      .from("staff")
-      .select("id")
-      .eq("profile_id", user.id)
-      .eq("barbershop_id", member.barbershop_id)
-      .eq("role", "barber")
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (ownStaffError || !ownStaff || queueItem.barber_id !== ownStaff.id) {
-      return { error: "Você só pode finalizar atendimentos que estão atribuídos ao seu perfil." };
-    }
-  }
 
   // ==========================================
 
   // VALIDAÇÃO DA MÁQUINA DE ESTADOS
 
   // ==========================================
+
+  if (!["in_progress", "awaiting_payment", "cancelled"].includes(status)) {
+    return { error: "Transição de fila inválida." };
+  }
+
+  if (member.role === "barber" && status === "cancelled") {
+    return { error: "O profissional não pode remover clientes da fila." };
+  }
 
   if (status === "in_progress" && currentStatus !== "waiting") {
 
@@ -285,6 +330,20 @@ export async function updateQueueStatusAction(
 
   }
 
+  // Um barbeiro só pode finalizar o ticket que está atribuído ao seu próprio staff.id.
+  if (member.role === "barber" && status === "awaiting_payment") {
+    const { data: ownStaff, error: ownStaffError } = await supabase
+      .from("staff")
+      .select("id")
+      .eq("profile_id", user.id)
+      .eq("barbershop_id", member.barbershop_id)
+      .eq("role", "barber")
+      .maybeSingle();
+
+    if (ownStaffError || !ownStaff || queueItem.barber_id !== ownStaff.id) {
+      return { error: "Você só pode finalizar um atendimento que esteja atribuído a você." };
+    }
+  }
 
 
   type QueueUpdatePayload = {
@@ -293,9 +352,9 @@ export async function updateQueueStatusAction(
 
     started_at?: string | null;
 
-    barber_id?: string | null;
-
     preferred_barber_id?: string | null;
+
+    barber_id?: string | null;
 
     barber_name?: string | null;
 
@@ -323,30 +382,29 @@ export async function updateQueueStatusAction(
 
 
 
-  let queueStartAudit: {
-    finalBarberId: string;
+  let queueStartAuditDetails: {
     preferredBarberId: string | null;
-    clientAcceptedDifferentBarber: boolean;
-    confirmedOutOfOrder: boolean;
-    waitingAheadCount: number;
+    assignedBarberId: string;
+    clientAcceptedPreferenceChange: boolean;
+    outOfOrderConfirmed: boolean;
+    earlierWaitingCount: number;
   } | null = null;
 
   if (status === "serving" || status === "in_progress") {
-    // O barbeiro autenticado só pode iniciar atendimento usando o próprio staff.id.
-    // Proprietário/gerente pode informar outro profissional, mas sempre dentro do tenant.
-    let finalBarberId: string | undefined;
-    let staffRecord: {
+    type QueueStaffRecord = {
       id: string;
       full_name: string;
-      role: string;
-      is_active: boolean | null;
       work_stations: { name?: string } | { name?: string }[] | null;
-    } | null = null;
+    };
 
+    let finalBarberId: string | null = null;
+    let staffRecord: QueueStaffRecord | null = null;
+
+    // A conta de barbeiro só pode iniciar atendimentos usando o próprio registro staff.
     if (member.role === "barber") {
       const { data: ownStaff, error: ownStaffError } = await supabase
         .from("staff")
-        .select("id, full_name, role, is_active, work_stations(name)")
+        .select("id, full_name, work_stations ( name )")
         .eq("profile_id", user.id)
         .eq("barbershop_id", member.barbershop_id)
         .eq("role", "barber")
@@ -358,112 +416,115 @@ export async function updateQueueStatusAction(
       }
 
       if (barberId && barberId !== ownStaff.id) {
-        return { error: "Um barbeiro só pode assumir atendimentos em seu próprio nome." };
+        return { error: "Um profissional só pode iniciar atendimentos em seu próprio nome." };
       }
 
       finalBarberId = ownStaff.id;
-      staffRecord = ownStaff as typeof staffRecord;
-    } else {
-      if (barberId) {
-        const { data: selectedStaff, error: selectedStaffError } = await supabase
-          .from("staff")
-          .select("id, full_name, role, is_active, work_stations(name)")
-          .eq("id", barberId)
-          .eq("barbershop_id", member.barbershop_id)
-          .eq("is_active", true)
-          .maybeSingle();
+      staffRecord = ownStaff as unknown as QueueStaffRecord;
+    } else if (barberId) {
+      const { data: selectedStaff, error: selectedStaffError } = await supabase
+        .from("staff")
+        .select("id, full_name, work_stations ( name )")
+        .eq("id", barberId)
+        .eq("barbershop_id", member.barbershop_id)
+        .eq("is_active", true)
+        .maybeSingle();
 
-        if (selectedStaffError || !selectedStaff) {
-          return { error: "O profissional selecionado não está ativo nesta barbearia." };
-        }
-
-        finalBarberId = selectedStaff.id;
-        staffRecord = selectedStaff as typeof staffRecord;
-      } else {
-        const { data: ownStaff, error: ownStaffError } = await supabase
-          .from("staff")
-          .select("id, full_name, role, is_active, work_stations(name)")
-          .eq("profile_id", user.id)
-          .eq("barbershop_id", member.barbershop_id)
-          .eq("is_active", true)
-          .maybeSingle();
-
-        if (ownStaffError || !ownStaff) {
-          return {
-            error: "Selecione um profissional ativo para assumir o atendimento.",
-          };
-        }
-
-        finalBarberId = ownStaff.id;
-        staffRecord = ownStaff as typeof staffRecord;
+      if (selectedStaffError || !selectedStaff) {
+        return { error: "O profissional selecionado não pertence a esta barbearia ou está inativo." };
       }
+
+      finalBarberId = selectedStaff.id;
+      staffRecord = selectedStaff as unknown as QueueStaffRecord;
+    } else {
+      const { data: ownStaff, error: ownStaffError } = await supabase
+        .from("staff")
+        .select("id, full_name, work_stations ( name )")
+        .eq("profile_id", user.id)
+        .eq("barbershop_id", member.barbershop_id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (ownStaffError || !ownStaff) {
+        return { error: "Para iniciar o atendimento, vincule seu perfil a um profissional ativo ou selecione um responsável autorizado." };
+      }
+
+      finalBarberId = ownStaff.id;
+      staffRecord = ownStaff as unknown as QueueStaffRecord;
     }
 
     if (!finalBarberId || !staffRecord) {
-      return { error: "Não foi possível identificar o profissional responsável." };
+      return { error: "Não foi possível determinar o profissional responsável pelo atendimento." };
     }
 
-    // Preferência explícita é a fonte canônica. O fallback preserva tickets antigos
-    // que gravavam a preferência em barber_id enquanto ainda estavam aguardando.
-    const preferredBarberId =
-      queueItem.preferred_barber_id ??
-      (currentStatus === "waiting" ? queueItem.barber_id : null);
+    // Bloqueia início de um segundo atendimento para o mesmo profissional.
+    // A validação da interface é apenas informativa; esta checagem é a regra de servidor.
+    const { data: activeTicket, error: activeTicketError } = await supabase
+      .from("virtual_queue")
+      .select("id, client_name")
+      .eq("barbershop_id", member.barbershop_id)
+      .eq("barber_id", finalBarberId)
+      .in("status", ["in_progress", "in_chair"])
+      .neq("id", id)
+      .limit(1)
+      .maybeSingle();
 
-    const requiresClientConsent = Boolean(
-      preferredBarberId && preferredBarberId !== finalBarberId
-    );
+    if (activeTicketError) {
+      console.error("[QUEUE_ACTIVE_TICKET_CHECK_ERROR]", activeTicketError);
+      return { error: "Não foi possível verificar se o profissional já está atendendo. Atualize e tente novamente." };
+    }
 
-    // A ordem é calculada novamente no servidor, considerando apenas quem ainda espera.
-    const { data: waitingQueue, error: waitingQueueError } = await supabase
+    if (activeTicket) {
+      return {
+        error: `${staffRecord.full_name} já está atendendo ${activeTicket.client_name}. Finalize esse atendimento antes de iniciar outro.`,
+      };
+    }
+
+    // Revalida a ordem atual no servidor imediatamente antes de iniciar.
+    const { data: waitingItems, error: waitingItemsError } = await supabase
       .from("virtual_queue")
       .select("id, joined_at")
       .eq("barbershop_id", member.barbershop_id)
-      .eq("status", "waiting");
+      .eq("status", "waiting")
+      .order("joined_at", { ascending: true })
+      .order("id", { ascending: true });
 
-    if (waitingQueueError || !waitingQueue) {
+    if (waitingItemsError || !waitingItems) {
+      console.error("[QUEUE_START_ORDER_CHECK_ERROR]", waitingItemsError);
       return { error: "Não foi possível verificar a ordem atual da fila. Atualize e tente novamente." };
     }
 
-    const orderedWaitingQueue = [...waitingQueue].sort((first, second) => {
-      const firstTime = first.joined_at ? Date.parse(first.joined_at) : Number.MAX_SAFE_INTEGER;
-      const secondTime = second.joined_at ? Date.parse(second.joined_at) : Number.MAX_SAFE_INTEGER;
-      return firstTime - secondTime || first.id.localeCompare(second.id);
-    });
-
-    const targetPosition = orderedWaitingQueue.findIndex((ticket) => ticket.id === id);
-    if (targetPosition < 0) {
-      return { error: "Este cliente não está mais aguardando na fila. Atualize e tente novamente." };
+    const targetQueueIndex = waitingItems.findIndex((item) => item.id === id);
+    if (targetQueueIndex < 0) {
+      return { error: "Este cliente não está mais aguardando na fila. Atualize a lista." };
     }
 
-    const waitingAheadCount = targetPosition;
-    const requiresQueueOrderOverride = waitingAheadCount > 0;
-    const preferredBarberConfirmed = confirmations?.clientAcceptedDifferentBarber === true;
-    const queueOrderConfirmed = confirmations?.confirmedOutOfOrder === true;
-
-    let preferredBarberName: string | null = null;
-    if (requiresClientConsent && preferredBarberId) {
-      const { data: preferredStaff } = await supabase
-        .from("staff")
-        .select("full_name")
-        .eq("id", preferredBarberId)
-        .eq("barbershop_id", member.barbershop_id)
-        .maybeSingle();
-      preferredBarberName = preferredStaff?.full_name ?? null;
-    }
+    const requiresOutOfOrderConfirmation = targetQueueIndex > 0;
+    const requiresPreferenceChangeConfirmation = Boolean(
+      effectivePreferredBarberId && effectivePreferredBarberId !== finalBarberId
+    );
+    const clientAcceptedPreferenceChange = confirmations?.clientAcceptedPreferenceChange === true;
+    const outOfOrderConfirmed = confirmations?.outOfOrderConfirmed === true;
 
     if (
-      (requiresClientConsent && !preferredBarberConfirmed) ||
-      (requiresQueueOrderOverride && !queueOrderConfirmed)
+      (requiresPreferenceChangeConfirmation && !clientAcceptedPreferenceChange) ||
+      (requiresOutOfOrderConfirmation && !outOfOrderConfirmed)
     ) {
       return {
         success: false,
-        confirmationRequired: true,
-        requiresClientConsent,
-        requiresQueueOrderOverride,
-        preferredBarberName,
-        waitingAheadCount,
-        clientName: queueItem.client_name,
+        requiresConfirmation: true,
+        confirmationRequirements: {
+          preferenceChange: requiresPreferenceChangeConfirmation,
+          outOfOrder: requiresOutOfOrderConfirmation,
+          earlierWaitingCount: targetQueueIndex,
+        },
+        error: "Confirme as condições especiais antes de iniciar este atendimento.",
       };
+    }
+
+    // Preserva a preferência dos tickets legados antes de atribuir o profissional real.
+    if (!queueItem.preferred_barber_id && effectivePreferredBarberId) {
+      updateData.preferred_barber_id = effectivePreferredBarberId;
     }
 
     updateData.barber_id = finalBarberId;
@@ -471,24 +532,20 @@ export async function updateQueueStatusAction(
     updateData.started_at = new Date().toISOString();
     updateData.cancellation_source = null;
 
-    // Migra preferência legada para a coluna canônica no mesmo update em que
-    // barber_id passa a significar o profissional que efetivamente assumiu.
-    updateData.preferred_barber_id = preferredBarberId;
-
-    const workStations = staffRecord.work_stations;
-    const chairName = Array.isArray(workStations)
-      ? workStations[0]?.name
-      : workStations?.name;
+    type WorkStationData = { name?: string } | { name?: string }[] | null;
+    const workStations = staffRecord.work_stations as WorkStationData;
+    const chairName = Array.isArray(workStations) ? workStations[0]?.name : workStations?.name;
     updateData.chair_number = chairName || "Cadeira Principal";
 
-    queueStartAudit = {
-      finalBarberId,
-      preferredBarberId,
-      clientAcceptedDifferentBarber: requiresClientConsent && preferredBarberConfirmed,
-      confirmedOutOfOrder: requiresQueueOrderOverride && queueOrderConfirmed,
-      waitingAheadCount,
+    queueStartAuditDetails = {
+      preferredBarberId: effectivePreferredBarberId || null,
+      assignedBarberId: finalBarberId,
+      clientAcceptedPreferenceChange,
+      outOfOrderConfirmed,
+      earlierWaitingCount: targetQueueIndex,
     };
   }
+
 
   if (status === "cancelled") {
 
@@ -530,6 +587,10 @@ export async function updateQueueStatusAction(
 
     console.error("Erro ao atualizar fila:", error);
 
+    if (status === "in_progress" && error.code === "23505") {
+      return { error: "Este profissional já possui um atendimento em andamento. Finalize-o antes de iniciar outro." };
+    }
+
     return { error: "Erro ao atualizar status." };
 
   }
@@ -548,35 +609,36 @@ export async function updateQueueStatusAction(
 
 
 
-  if (queueStartAudit && (
-    queueStartAudit.clientAcceptedDifferentBarber ||
-    queueStartAudit.confirmedOutOfOrder
-  )) {
-    try {
+  if (status === "in_progress" && queueStartAuditDetails) {
+    const hasConfirmedException =
+      queueStartAuditDetails.clientAcceptedPreferenceChange || queueStartAuditDetails.outOfOrderConfirmed;
+
+    if (hasConfirmedException) {
       const context: TenantContext = {
         tenantId: member.barbershop_id,
         userId: user.id,
         role: member.role as TenantContext["role"],
       };
 
-      const eventService = new EventLogService(new EventLogRepository(supabase));
-      await eventService.logEvent(context, {
-        entityType: "QUEUE",
-        entityId: id,
-        eventType: "ADMIN_ACTION",
-        performedBy: user.id,
-        payload: {
-          action: "QUEUE_START_CONFIRMED_WITH_EXCEPTION",
-          actualBarberId: queueStartAudit.finalBarberId,
-          preferredBarberId: queueStartAudit.preferredBarberId,
-          clientAcceptedDifferentBarber: queueStartAudit.clientAcceptedDifferentBarber,
-          confirmedOutOfOrder: queueStartAudit.confirmedOutOfOrder,
-          waitingAheadCount: queueStartAudit.waitingAheadCount,
-        },
-      });
-    } catch (auditError) {
-      // A falha de auditoria é registrada sem reportar falha falsa após o ticket iniciar.
-      console.error("[QUEUE_START_EXCEPTION_AUDIT]", auditError);
+      try {
+        const eventService = new EventLogService(new EventLogRepository(supabase));
+        await eventService.logEvent(context, {
+          entityType: "QUEUE",
+          entityId: id,
+          eventType: "ADMIN_ACTION",
+          performedBy: user.id,
+          payload: {
+            action: "QUEUE_SERVICE_STARTED_WITH_EXCEPTION",
+            preferredBarberId: queueStartAuditDetails.preferredBarberId,
+            assignedBarberId: queueStartAuditDetails.assignedBarberId,
+            clientAcceptedPreferenceChange: queueStartAuditDetails.clientAcceptedPreferenceChange,
+            outOfOrderConfirmed: queueStartAuditDetails.outOfOrderConfirmed,
+            earlierWaitingCount: queueStartAuditDetails.earlierWaitingCount,
+          },
+        });
+      } catch (eventError) {
+        console.error("[QUEUE_START_EXCEPTION_AUDIT]", eventError);
+      }
     }
   }
 
@@ -635,7 +697,8 @@ export async function updateQueueStatusAction(
 
 
   revalidatePath("/fila");
-
+  revalidatePath("/profissional/fila");
+  revalidatePath("/profissional");
   revalidatePath("/pdv");
 
 
@@ -668,7 +731,30 @@ export async function addManualClientAction(barbershopId: string, clientName: st
 
     if (!user) return { success: false, error: "Não autorizado." };
 
+    const { data: member, error: memberError } = await supabase
+      .from("barbershop_members")
+      .select("role")
+      .eq("profile_id", user.id)
+      .eq("barbershop_id", barbershopId)
+      .maybeSingle();
 
+    if (memberError || !member || !["owner", "manager", "receptionist"].includes(member.role)) {
+      return { success: false, error: "Você não tem permissão para inserir clientes manualmente nesta fila." };
+    }
+
+    if (barberId) {
+      const { data: preferredStaff, error: preferredStaffError } = await supabase
+        .from("staff")
+        .select("id")
+        .eq("id", barberId)
+        .eq("barbershop_id", barbershopId)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (preferredStaffError || !preferredStaff) {
+        return { success: false, error: "O profissional preferido não pertence a esta barbearia ou está inativo." };
+      }
+    }
 
     const { error } = await supabase
 
@@ -680,10 +766,9 @@ export async function addManualClientAction(barbershopId: string, clientName: st
 
         client_name: clientName,
 
-        // A escolha feita no cadastro manual é uma preferência, não uma atribuição.
-        preferred_barber_id: barberId || null,
-
         barber_id: null,
+
+        preferred_barber_id: barberId || null,
 
         is_authenticated: false, 
 
@@ -731,7 +816,16 @@ export async function generateNewPinAction(barbershopId: string) {
 
     if (!user) return { success: false, error: "Não autorizado." };
 
+    const { data: member, error: memberError } = await supabase
+      .from("barbershop_members")
+      .select("role")
+      .eq("profile_id", user.id)
+      .eq("barbershop_id", barbershopId)
+      .maybeSingle();
 
+    if (memberError || !member || !["owner", "manager"].includes(member.role)) {
+      return { success: false, error: "Apenas proprietários e gerentes podem alterar o PIN da barbearia." };
+    }
 
     const newPin = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -772,6 +866,20 @@ export async function getBarbershopPinAction(barbershopId: string) {
   try {
 
     const supabase = await createClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { pin: "0000" };
+
+    const { data: member, error: memberError } = await supabase
+      .from("barbershop_members")
+      .select("role")
+      .eq("profile_id", user.id)
+      .eq("barbershop_id", barbershopId)
+      .maybeSingle();
+
+    if (memberError || !member || !["owner", "manager"].includes(member.role)) {
+      return { pin: "0000" };
+    }
 
     const { data, error } = await supabase
 
