@@ -54,7 +54,6 @@ type PublicQueueAvailabilityStatusCode =
 
 interface PublicAvailabilityInfo {
   status: PublicQueueAvailabilityStatusCode;
-  reason: string | null;
   businessHoursConfigured: boolean;
   businessOpenNow: boolean | null;
   nextBusinessOpeningAt: string | null;
@@ -139,7 +138,6 @@ export default function QueueForm({
   const [estimatedWaitMinutes, setEstimatedWaitMinutes] = useState<number | null>(null);
   const [queueEstimateReceived, setQueueEstimateReceived] = useState(false);
   const [eligibleBarberCount, setEligibleBarberCount] = useState<number | null>(null);
-  const [eligibleBarberIds, setEligibleBarberIds] = useState<string[] | null>(null);
   const [projectedBarberName, setProjectedBarberName] = useState<string | null>(null);
   const [publicAvailability, setPublicAvailability] = useState<PublicAvailabilityInfo | null>(null);
 
@@ -149,6 +147,7 @@ export default function QueueForm({
   const [queueId, setQueueId] = useState<string | null>(initialQueueData?.id || null);
   const queueIdRef = useRef<string | null>(queueId);
   const userRef = useRef<User | null>(user);
+  const finishRequestInFlightRef = useRef(false);
 
   const [ticketClientAuthId, setTicketClientAuthId] = useState<string | null>(
     initialQueueData?.client_auth_id || null
@@ -216,7 +215,6 @@ export default function QueueForm({
     register,
     handleSubmit,
     setValue,
-    reset: resetWalkInForm,
     formState: { errors, isSubmitting: isSubmittingWalkIn }
   } = useForm<WalkInFormValues>({
     resolver: zodResolver(walkInSchema),
@@ -266,20 +264,50 @@ export default function QueueForm({
     setWalkInName(null);
   }, [handleSetQueueId]);
 
-  const handleResetWalkInView = useCallback(() => {
-    setInQueue(false);
-    handleSetQueueId(null);
-    setWalkInName(null);
-    setCurrentStatus(null);
-    setCancellationType(null);
-    resetWalkInForm();
-    turnstileRef.current?.reset();
-    setTurnstileToken(null);
-    // Limpeza extra para prevenir estados zumbis
-    if (typeof document !== "undefined") {
-      document.cookie = "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  const handleFinishAndGoToCustomerArea = useCallback(async () => {
+    if (finishRequestInFlightRef.current) return;
+    finishRequestInFlightRef.current = true;
+
+    try {
+      const currentSlug =
+        typeof window !== "undefined"
+          ? window.location.pathname.split("/").filter(Boolean).pop() || ""
+          : "";
+
+      const res = await fetch("/api/public/queue/dismiss", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ slug: currentSlug }),
+      });
+
+      const result = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(
+          result?.error || "Não foi possível encerrar o acompanhamento da fila."
+        );
+      }
+
+      if (typeof document !== "undefined") {
+        document.cookie =
+          "walkInQueueId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      }
+
+      // A API revoga o token do ticket e limpa o cookie HttpOnly.
+      // Sair desta página encerra as consultas e a inscrição Realtime.
+      window.location.assign("/agendar");
+    } catch (error) {
+      finishRequestInFlightRef.current = false;
+      console.error("Erro ao finalizar o acompanhamento da fila:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível ir para a área do cliente."
+      );
     }
-  }, [handleSetQueueId, resetWalkInForm]);
+  }, []);
 
   // =========================================================================
   // SINCRONIZAÇÃO FORÇADA DE DADOS DO SERVIDOR (INICIAL)
@@ -302,7 +330,7 @@ export default function QueueForm({
   }, [initialQueueData, isTerminalStatus, handleSetQueueId]);
 
   // =========================================================================
-  // TIMER: RETORNO AUTOMÁTICO PARA A TELA INICIAL
+  // TIMER: ENCAMINHAMENTO AUTOMÁTICO À ÁREA DO CLIENTE
   // =========================================================================
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -315,8 +343,7 @@ export default function QueueForm({
           if (prev === null) return null;
           if (prev <= 1) {
             clearInterval(interval);
-            handleResetTerminalState();
-            return null;
+            return 0;
           }
           return prev - 1;
         });
@@ -328,7 +355,19 @@ export default function QueueForm({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [currentStatus, hasRated, isTerminalStatus, handleResetTerminalState]);
+  }, [currentStatus, hasRated, isTerminalStatus]);
+
+  useEffect(() => {
+    if (
+      countdown === 0 &&
+      isTerminalStatus(currentStatus) &&
+      currentStatus !== "cancelled" &&
+      hasRated &&
+      userRef.current
+    ) {
+      void handleFinishAndGoToCustomerArea();
+    }
+  }, [countdown, currentStatus, hasRated, isTerminalStatus, handleFinishAndGoToCustomerArea]);
 
   // =========================================================================
   // NOVO FLUXO SEGURO DE BUSCA DE STATUS (API Server-side)
@@ -386,10 +425,6 @@ export default function QueueForm({
           status: allowedStatuses.includes(availabilityData.status)
             ? availabilityData.status
             : "available",
-          reason:
-            typeof availabilityData.reason === "string"
-              ? availabilityData.reason
-              : null,
           businessHoursConfigured: availabilityData.businessHoursConfigured === true,
           businessOpenNow:
             typeof availabilityData.businessOpenNow === "boolean"
@@ -425,15 +460,6 @@ export default function QueueForm({
             : 0
         );
 
-        if (Array.isArray(queueEstimate.eligibleBarberIds)) {
-          setEligibleBarberIds(
-            queueEstimate.eligibleBarberIds.filter(
-              (barberId: unknown): barberId is string =>
-                typeof barberId === "string"
-            )
-          );
-        }
-
         const ownWait =
           typeof myEstimate?.estimatedWaitMinutes === "number"
             ? myEstimate.estimatedWaitMinutes
@@ -468,7 +494,9 @@ export default function QueueForm({
 
         if (isTerminal && ticket.is_rated) {
           if (queueIdRef.current !== ticket.id) {
-            handleResetTerminalState();
+            // O ticket já foi avaliado em uma sessão anterior. Não reabre
+            // o acompanhamento nem volta a consultar posição/previsão.
+            void handleFinishAndGoToCustomerArea();
             return;
           }
         }
@@ -496,22 +524,7 @@ export default function QueueForm({
     } catch (error) {
       console.error("Erro ao sincronizar status seguro:", error);
     }
-  }, [currentStatus, isTerminalStatus, handleSetQueueId, handleResetTerminalState]);
-
-  useEffect(() => {
-    if (
-      selectedBarberId !== "next" &&
-      eligibleBarberIds !== null &&
-      !eligibleBarberIds.includes(selectedBarberId)
-    ) {
-      setSelectedBarberId("next");
-    }
-  }, [selectedBarberId, eligibleBarberIds]);
-
-  const selectableBarbers =
-    eligibleBarberIds === null
-      ? barbers
-      : barbers.filter((barber) => eligibleBarberIds.includes(barber.id));
+  }, [currentStatus, isTerminalStatus, handleSetQueueId, handleResetTerminalState, handleFinishAndGoToCustomerArea]);
 
   const syncRef = useRef(fetchQueueStatus);
   useEffect(() => {
@@ -519,51 +532,102 @@ export default function QueueForm({
   }, [fetchQueueStatus]);
 
   // =========================================================================
-  // O RADAR SILENCIOSO (Polling seguro acionado mesmo sem Realtime)
+  // SINCRONIZAÇÃO INICIAL: UMA CONSULTA AO ABRIR A PÁGINA
   // =========================================================================
   useEffect(() => {
-    // 8 segundos se estiver na fila, 15 segundos se estiver apenas olhando o tamanho da fila
+    if (syncRef.current) {
+      syncRef.current();
+    }
+  }, []);
+
+  // =========================================================================
+  // POLLING ADAPTATIVO
+  // =========================================================================
+  useEffect(() => {
+    // Após o atendimento terminar, a tela de conversão/avaliação é local.
+    // Não continuamos consultando posição ou previsão enquanto ela é exibida.
+    if (isTerminalStatus(currentStatus)) {
+      return;
+    }
+
+    const visitorWithoutTicketAndUnavailable =
+      !inQueue &&
+      publicAvailability !== null &&
+      publicAvailability.status !== "available";
+
+    const intervalMs = inQueue
+      ? 120_000
+      : visitorWithoutTicketAndUnavailable
+        ? 600_000
+        : 120_000;
+
     const interval = setInterval(() => {
-      if (syncRef.current) syncRef.current();
-    }, inQueue ? 8000 : 15000);
+      if (syncRef.current) {
+        syncRef.current();
+      }
+    }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [inQueue]);
+  }, [inQueue, currentStatus, publicAvailability?.status, isTerminalStatus]);
 
   // =========================================================================
-  // REALTIME SEGURO (Apenas atua como Gatilho para buscar na API Segura)
+  // REALTIME: MANTIDO PARA QUEM TEM TICKET ATIVO
   // =========================================================================
   useEffect(() => {
-    // Escuta mudanças. Se o RLS bloquear para 'anon', não tem problema: o setInterval() acima cobre a lacuna.
+    // Visitantes sem ticket não precisam de uma inscrição que dispare
+    // consultas a cada evento de outros clientes. O Realtime fica ativo
+    // para o ticket atual e permite atualizar posição/espera imediatamente.
+    if (!inQueue || !queueId || isTerminalStatus(currentStatus)) {
+      return;
+    }
+
     const channel = supabase
       .channel(`public-queue-${barbershopId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "public_queue_events", filter: `barbershop_id=eq.${barbershopId}` },
+        {
+          event: "*",
+          schema: "public",
+          table: "public_queue_events",
+          filter: `barbershop_id=eq.${barbershopId}`,
+        },
         () => {
-           if (syncRef.current) syncRef.current();
+          if (syncRef.current) {
+            syncRef.current();
+          }
         }
       )
       .subscribe();
 
-    if (syncRef.current) syncRef.current();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [barbershopId, supabase, inQueue, queueId, currentStatus, isTerminalStatus]);
 
-    return () => { supabase.removeChannel(channel); };
-  }, [barbershopId, supabase]);
-
+  // Ao voltar à aba, atualizamos imediatamente apenas quem tem ticket ativo.
+  // Visitantes sem ticket respeitam o intervalo de até 10 minutos quando
+  // a fila está indisponível; atualizar a página manualmente consulta na hora.
   useEffect(() => {
     const handleVisibilityAndFocus = () => {
-      if (document.visibilityState === 'visible') {
-        if (syncRef.current) syncRef.current();
+      if (
+        document.visibilityState === "visible" &&
+        inQueue &&
+        !isTerminalStatus(currentStatus)
+      ) {
+        if (syncRef.current) {
+          syncRef.current();
+        }
       }
     };
-    window.addEventListener('visibilitychange', handleVisibilityAndFocus);
-    window.addEventListener('focus', handleVisibilityAndFocus);
+
+    window.addEventListener("visibilitychange", handleVisibilityAndFocus);
+    window.addEventListener("focus", handleVisibilityAndFocus);
+
     return () => {
-      window.removeEventListener('visibilitychange', handleVisibilityAndFocus);
-      window.removeEventListener('focus', handleVisibilityAndFocus);
+      window.removeEventListener("visibilitychange", handleVisibilityAndFocus);
+      window.removeEventListener("focus", handleVisibilityAndFocus);
     };
-  }, []);
+  }, [inQueue, currentStatus, isTerminalStatus]);
 
   // =========================================================================
   // RECUPERAÇÃO DE SESSÃO AVULSA
@@ -811,37 +875,7 @@ export default function QueueForm({
     }
   };
 
-  const handleDismissCompletedTicket = async () => {
-    try {
-      const currentSlug =
-        typeof window !== "undefined"
-          ? window.location.pathname.split("/").filter(Boolean).pop() || ""
-          : "";
-
-      const res = await fetch("/api/public/queue/dismiss", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          slug: currentSlug,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error("Erro ao dispensar atendimento");
-      }
-
-      handleResetWalkInView();
-
-      if (syncRef.current) {
-        syncRef.current();
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("Não foi possível voltar para a tela inicial.");
-    }
-  };
+  const handleDismissCompletedTicket = handleFinishAndGoToCustomerArea;
 
   const handleVerifyPin = async () => {
     if (!manualPin || manualPin.length < 4) return;
@@ -968,7 +1002,7 @@ export default function QueueForm({
           </div>
         </button>
 
-        {selectableBarbers.map((b) => {
+        {barbers.map((b) => {
           const isSelected = selectedBarberId === b.id;
           const firstName = b.full_name.split(' ')[0];
           return (
@@ -1011,14 +1045,6 @@ export default function QueueForm({
 
   const isBarbershopClosed =
     publicAvailability?.status === "barbershop_closed";
-  const isQueueDisabled =
-    publicAvailability?.reason === "queue_disabled";
-  const isBusinessHoursNotConfigured =
-    publicAvailability?.reason === "business_hours_not_configured";
-  const areQueueProfessionalsNotConfigured =
-    publicAvailability?.reason === "no_queue_professionals_configured";
-  const areQueueProfessionalsNotAccepting =
-    publicAvailability?.reason === "no_queue_professionals_accepting";
 
   const shouldShowNextBusinessOpening = Boolean(
     publicAvailability &&
@@ -1092,65 +1118,46 @@ export default function QueueForm({
                 : "border-blue-200 bg-blue-50"
             )}
           >
-            <div className="mb-3 flex flex-col items-center justify-center gap-2">
+            <div className="mb-2 flex items-center justify-center gap-2">
               <Clock
                 className={cn(
-                  "size-6",
-                  isBarbershopClosed ? "text-amber-600" : "text-blue-600"
+                  "size-5",
+                  publicAvailability.status === "barbershop_closed"
+                    ? "text-amber-600"
+                    : "text-blue-600"
                 )}
-                aria-hidden="true"
               />
               <h4
                 className={cn(
                   "font-bold",
-                  isBarbershopClosed ? "text-amber-950" : "text-blue-950"
+                  publicAvailability.status === "barbershop_closed"
+                    ? "text-amber-950"
+                    : "text-blue-950"
                 )}
               >
-                {isBarbershopClosed
-                  ? "A barbearia está fechada"
-                  : isQueueDisabled
-                    ? "Esta barbearia não atende por fila ou ordem de chegada"
-                    : isBusinessHoursNotConfigured
-                      ? "O expediente da barbearia ainda não está configurado"
-                      : areQueueProfessionalsNotConfigured
-                        ? "A fila ainda não está configurada para os profissionais"
-                        : "Não estamos aceitando novos ingressos no momento"}
+                Não estamos aceitando novos ingressos no momento
               </h4>
             </div>
 
             <p
               className={cn(
                 "text-sm leading-relaxed",
-                isBarbershopClosed ? "text-amber-900/90" : "text-blue-900/90"
+                publicAvailability.status === "barbershop_closed"
+                  ? "text-amber-900/90"
+                  : "text-blue-900/90"
               )}
             >
-              {isBarbershopClosed
-                ? "No momento, estamos fora do horário de funcionamento da barbearia. Confira abaixo a próxima abertura cadastrada."
-                : isQueueDisabled
-                  ? "O atendimento por fila ou ordem de chegada está desativado para esta barbearia. Consulte a recepção para conhecer os serviços e as opções de agendamento."
-                  : isBusinessHoursNotConfigured
-                    ? "Ainda não há expediente geral cadastrado para esta barbearia. Entre em contato com a recepção para confirmar os horários de atendimento."
-                    : areQueueProfessionalsNotConfigured
-                      ? "Nenhum profissional tem horários ativos configurados para atendimento por fila. Entre em contato com a recepção para consultar as opções de atendimento."
-                      : areQueueProfessionalsNotAccepting
-                        ? "No momento, os profissionais não estão aceitando novas entradas pela fila. Confira abaixo a próxima abertura cadastrada da barbearia."
-                        : "No momento, não estamos aceitando novos ingressos na fila. Confira abaixo a próxima abertura cadastrada da barbearia."}
+              No momento, o profissional não está aceitando novos ingressos na fila. A próxima abertura cadastrada da barbearia está indicada abaixo.
             </p>
 
-            {!isQueueDisabled &&
-              !isBusinessHoursNotConfigured &&
-              !areQueueProfessionalsNotConfigured &&
-              shouldShowNextBusinessOpening &&
+            {shouldShowNextBusinessOpening &&
               publicAvailability?.nextBusinessOpeningAt && (
                 <p className="mt-2 text-sm font-semibold text-amber-950">
                   Próxima abertura da barbearia: {formatFriendlyScheduleDateTime(publicAvailability.nextBusinessOpeningAt)}.
                 </p>
               )}
 
-            {!isQueueDisabled &&
-              !isBusinessHoursNotConfigured &&
-              !areQueueProfessionalsNotConfigured &&
-              !publicAvailability.nextBusinessOpeningAt && (
+            {!publicAvailability.nextBusinessOpeningAt && (
               <p className="mt-2 text-sm font-semibold text-slate-700">
                 A próxima abertura da barbearia não está cadastrada. Entre em contato com a recepção para confirmar o expediente.
               </p>
@@ -1432,7 +1439,7 @@ export default function QueueForm({
 
             <div className="w-full bg-slate-50 p-4 rounded-2xl border border-slate-100">
               <p className="text-xs text-slate-500 font-medium text-center leading-relaxed">
-                Você pode voltar para a tela inicial e entrar novamente na fila quando quiser.
+                O acompanhamento da fila foi encerrado. Você pode seguir para a área do cliente.
               </p>
             </div>
 
@@ -1442,7 +1449,7 @@ export default function QueueForm({
                 onClick={handleDismissCompletedTicket}
                 className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
               >
-                Voltar para a Tela Inicial
+                Ir para a Área do Cliente
               </Button>
             </div>
           </div>
@@ -1592,10 +1599,10 @@ export default function QueueForm({
                      )}
                      <Button
                        type="button"
-                       onClick={user ? handleResetTerminalState : handleResetWalkInView}
+                       onClick={handleDismissCompletedTicket}
                        className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all active:scale-[0.98]"
                      >
-                       Voltar para a Tela Inicial {countdown !== null ? `(${countdown}s)` : ""}
+                       Ir para a Área do Cliente {countdown !== null ? `(${countdown}s)` : ""}
                      </Button>
                    </div>
                 </div>
