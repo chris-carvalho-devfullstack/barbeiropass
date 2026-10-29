@@ -1,3 +1,4 @@
+// src/app/api/public/queue/join/route.ts
 export const runtime = "edge";
 
 import { NextResponse } from "next/server";
@@ -95,44 +96,77 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Barbearia não encontrada." }, { status: 404 });
     }
 
-    // Revalida disponibilidade no servidor antes de aceitar nova entrada.
+    // Revalida a disponibilidade no servidor antes de aceitar nova entrada.
+    // A validação considera somente o dia operacional atual.
     const queueState = await calculateSupabaseQueueWaitTimes({
       barbershopId: barbershop.id,
       timeZone: "America/Sao_Paulo",
-      daysAhead: 14,
+      daysAhead: 1,
       includePublicPreview: true,
     });
 
     const availabilityStatus = queueState.publicAvailability.status;
+    const availabilityReason = queueState.publicAvailability.reason;
 
     if (availabilityStatus !== "available") {
-      const availabilityMessage =
-        availabilityStatus === "barbershop_closed"
-          ? "A barbearia está fechada no momento e não está aceitando novas entradas."
-          : availabilityStatus === "professionals_off_shift"
-            ? "No momento, não há barbeiros disponíveis para novas entradas na fila."
-            : availabilityStatus === "queue_unavailable"
-              ? "A fila virtual não está aceitando novas entradas no momento."
-              : "Não há disponibilidade para novas entradas na fila no momento.";
+      const errorMessage =
+        availabilityReason === "queue_disabled"
+          ? "Esta barbearia não atende por fila ou ordem de chegada."
+          : availabilityReason === "business_hours_not_configured"
+            ? "O expediente da barbearia ainda não está configurado para atendimento por fila."
+            : availabilityReason === "no_queue_professionals_configured"
+              ? "Nenhum profissional está configurado para atender por fila no momento."
+              : availabilityStatus === "barbershop_closed"
+                ? "A barbearia está fechada no momento. Confira a próxima abertura cadastrada."
+                : "Não estamos aceitando novos ingressos no momento.";
 
       return NextResponse.json(
-        { error: availabilityMessage, availabilityStatus },
+        {
+          error: errorMessage,
+          availabilityStatus,
+          availabilityReason,
+          nextBusinessOpeningAt: queueState.publicAvailability.nextBusinessOpeningAt,
+        },
         { status: 409 }
       );
     }
 
     if (barberId) {
+      // Primeiro valida o estado atual no banco. Null permanece compatível
+      // com o padrão do serviço, que trata accepting_queue ausente como true.
       const { data: barber, error: barberError } = await admin
         .from("staff")
-        .select("id")
+        .select("id, accepting_queue")
         .eq("id", barberId)
         .eq("barbershop_id", barbershop.id)
         .eq("role", "barber")
         .eq("is_active", true)
         .maybeSingle();
 
-      if (barberError || !barber) {
-        return NextResponse.json({ error: "Profissional indisponível." }, { status: 400 });
+      if (barberError || !barber || barber.accepting_queue === false) {
+        return NextResponse.json(
+          {
+            error: "Esse profissional não está aceitando novos ingressos. Escolha outro profissional ou selecione Qualquer um.",
+          },
+          { status: 409 }
+        );
+      }
+
+      // Reaproveita a elegibilidade calculada pelo mesmo estimador usado
+      // para a página pública; isso também impede preferências fora do horário.
+      const selectedBarberIsEligible = queueState.estimate.barbers.some(
+        (barberSnapshot) =>
+          barberSnapshot.barberId === barberId &&
+          barberSnapshot.eligibleForNewClients
+      );
+
+      if (!selectedBarberIsEligible) {
+        return NextResponse.json(
+          {
+            error: "Esse profissional não está disponível para novas entradas neste momento. Escolha outro profissional ou selecione Qualquer um.",
+          },
+          { status: 409 }
+        );
       }
     }
 

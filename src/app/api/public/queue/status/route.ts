@@ -79,20 +79,22 @@ export async function GET(request: Request) {
       }
     }
 
-    // Calcula a fila e simula um visitante adicional sem persistir
-    // um ticket artificial no banco.
+    // Um visitante sem ticket recebe uma validação rápida antes de qualquer
+    // simulação pública. Quem já tem ticket válido continua recebendo a
+    // estimativa individual, mas não precisa de um ticket virtual adicional.
     const queueState = await calculateSupabaseQueueWaitTimes({
       barbershopId: barbershop.id,
       timeZone: "America/Sao_Paulo",
-      daysAhead: 14,
-      includePublicPreview: true,
+      daysAhead: 1,
+      includePublicPreview: !ticket,
     });
 
-    const previewEstimate =
-      queueState.estimate.estimates.find(
-        (estimate) =>
-          estimate.ticketId === PUBLIC_PREVIEW_TICKET_ID
-      ) ?? null;
+    const previewEstimate = !ticket
+      ? queueState.estimate.estimates.find(
+          (estimate) =>
+            estimate.ticketId === PUBLIC_PREVIEW_TICKET_ID
+        ) ?? null
+      : null;
 
     // Só procuramos a estimativa individual do ticket depois de validar
     // o cookie de posse e somente quando o cliente ainda está aguardando.
@@ -138,8 +140,13 @@ export async function GET(request: Request) {
             previewEstimate?.estimatedStartAt ?? null,
           eligibleBarberCount:
             queueState.eligibleBarberCount,
+          eligibleBarberIds: queueState.estimate.barbers
+            .filter((barber) => barber.eligibleForNewClients)
+            .map((barber) => barber.barberId),
           acceptsQueue:
             queueState.barbershopAcceptsQueue,
+          availabilityReason:
+            queueState.publicAvailability.reason,
           publicAvailability: queueState.publicAvailability,
         },
 

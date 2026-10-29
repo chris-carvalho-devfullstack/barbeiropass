@@ -12,7 +12,6 @@ import {
 
 import {
   estimateQueueWaitTimes,
-  type QueueBarberInput,
   type QueueServiceMode,
   type QueueTicketInput,
   type QueueWaitTimeEstimatorResult,
@@ -104,8 +103,20 @@ export type PublicQueueAvailabilityStatusCode =
   | "queue_unavailable"
   | "no_availability";
 
+export type PublicQueueAvailabilityReasonCode =
+  | "queue_disabled"
+  | "business_hours_not_configured"
+  | "no_queue_professionals_configured"
+  | "no_queue_professionals_accepting"
+  | "barbershop_closed"
+  | "no_professionals_available_now"
+  | "capacity_unavailable"
+  | "no_preview_estimate"
+  | null;
+
 export interface PublicQueueAvailabilityStatus {
   status: PublicQueueAvailabilityStatusCode;
+  reason: PublicQueueAvailabilityReasonCode;
   businessHoursConfigured: boolean;
   businessOpenNow: boolean | null;
   nextBusinessOpeningAt: string | null;
@@ -130,6 +141,56 @@ export interface SupabaseQueueWaitTimeResult {
   publicAvailability: PublicQueueAvailabilityStatus;
 
   estimate: QueueWaitTimeEstimatorResult;
+}
+
+interface UnavailablePreflightResultInput {
+  barbershopId: string;
+  now: Date;
+  timeZone: string;
+  barbershopAcceptsQueue: boolean;
+  defaultQueueDurationMinutes: number;
+  status: PublicQueueAvailabilityStatusCode;
+  reason: PublicQueueAvailabilityReasonCode;
+  businessHoursConfigured?: boolean;
+  businessOpenNow?: boolean | null;
+  nextBusinessOpeningAt?: string | null;
+  businessClosesAt?: string | null;
+}
+
+function createUnavailablePreflightResult(
+  input: UnavailablePreflightResultInput
+): SupabaseQueueWaitTimeResult {
+  const calculatedAt = input.now.toISOString();
+
+  const estimate: QueueWaitTimeEstimatorResult = {
+    calculatedAt,
+    totalWaiting: 0,
+    estimates: [],
+    activeServices: [],
+    barbers: [],
+  };
+
+  return {
+    barbershopId: input.barbershopId,
+    calculatedAt,
+    timeZone: input.timeZone,
+    barbershopAcceptsQueue: input.barbershopAcceptsQueue,
+    defaultQueueDurationMinutes: input.defaultQueueDurationMinutes,
+    waitingCount: 0,
+    activeTicketCount: 0,
+    eligibleBarberCount: 0,
+    publicAvailability: {
+      status: input.status,
+      reason: input.reason,
+      businessHoursConfigured: input.businessHoursConfigured ?? false,
+      businessOpenNow: input.businessOpenNow ?? null,
+      nextBusinessOpeningAt: input.nextBusinessOpeningAt ?? null,
+      businessClosesAt: input.businessClosesAt ?? null,
+      professionalsAvailableNow: 0,
+      nextAvailableAt: input.nextBusinessOpeningAt ?? null,
+    },
+    estimate,
+  };
 }
 
 function normalizeServiceMode(value: string): QueueServiceMode {
@@ -189,74 +250,6 @@ function normalizeQueueAcceptancePolicy(
   return DEFAULT_QUEUE_ACCEPTANCE_POLICY;
 }
 
-function findNextProfessionalAvailabilityAt(
-  barbers: QueueBarberInput[],
-  nowDate: Date,
-  timeZone: string,
-  serviceDurationMinutes: number,
-  queueAcceptancePolicy: QueueAcceptancePolicy,
-  skipCurrentLocalDay: boolean
-): string | null {
-  const nowMs = nowDate.getTime();
-  const currentLocalDateKey = getLocalDateKeyInTimeZone(nowDate, timeZone);
-  const durationMs = serviceDurationMinutes * 60_000;
-  const allowServiceToContinueAfterClosing =
-    queueAcceptancePolicy === "accept_until_closing";
-  let earliestStartMs: number | null = null;
-
-  for (const barber of barbers) {
-    if (
-      !barber.isActive ||
-      !barber.acceptingQueue ||
-      (barber.serviceMode !== "queue" && barber.serviceMode !== "hybrid")
-    ) {
-      continue;
-    }
-
-    for (const window of barber.availabilityWindows) {
-      const windowStartMs = Date.parse(window.startAt);
-      const windowEndMs = Date.parse(window.endAt);
-
-      if (
-        !Number.isFinite(windowStartMs) ||
-        !Number.isFinite(windowEndMs) ||
-        windowEndMs <= windowStartMs
-      ) {
-        continue;
-      }
-
-      const candidateStartMs = Math.max(nowMs, windowStartMs);
-
-      if (candidateStartMs >= windowEndMs) {
-        continue;
-      }
-
-      if (
-        skipCurrentLocalDay &&
-        getLocalDateKeyInTimeZone(new Date(candidateStartMs), timeZone) === currentLocalDateKey
-      ) {
-        continue;
-      }
-
-      const serviceFitsWindow = candidateStartMs + durationMs <= windowEndMs;
-      const canStartWithinWindow =
-        allowServiceToContinueAfterClosing || serviceFitsWindow;
-
-      if (!canStartWithinWindow) {
-        continue;
-      }
-
-      if (earliestStartMs === null || candidateStartMs < earliestStartMs) {
-        earliestStartMs = candidateStartMs;
-      }
-    }
-  }
-
-  return earliestStartMs === null
-    ? null
-    : new Date(earliestStartMs).toISOString();
-}
-
 function getLocalDateKeyInTimeZone(
   value: Date | string,
   timeZone: string
@@ -304,7 +297,7 @@ export async function calculateSupabaseQueueWaitTimes(
     barbershopId,
     now = new Date(),
     timeZone = DEFAULT_TIME_ZONE,
-    daysAhead = 14,
+    daysAhead = 1,
     includePublicPreview = false,
   } = options;
 
@@ -324,40 +317,7 @@ export async function calculateSupabaseQueueWaitTimes(
 
   const admin = createAdminClient();
 
-  // 1. Busca os profissionais da barbearia.
-  //
-  // Não filtramos is_active aqui: um profissional desativado pode
-  // ainda ter um atendimento em andamento que ocupa sua linha do tempo.
-  const { data: staffData, error: staffError } = await admin
-    .from("staff")
-    .select("id, full_name, is_active, accepting_queue")
-    .eq("barbershop_id", barbershopId)
-    .eq("role", "barber");
-
-  if (staffError) {
-    console.error(
-      "[SupabaseQueueWaitTimeService] Erro ao buscar profissionais:",
-      staffError.message
-    );
-
-    throw new Error(
-      "Não foi possível consultar os profissionais da barbearia."
-    );
-  }
-
-  const staffRows = (staffData ?? []) as unknown as StaffRow[];
-  const staffIds = staffRows.map((staff) => staff.id);
-
-  // 2. Consulta configurações, horários gerais e tickets em paralelo.
-  const [settingsResult, ticketsResult, businessHoursResult] = await Promise.all([
-    admin
-      .from("barbershop_settings")
-      .select(
-        "accepts_walk_in, default_queue_duration_minutes, queue_acceptance_policy"
-      )
-      .eq("barbershop_id", barbershopId)
-      .maybeSingle(),
-
+  const loadQueueTickets = () =>
     admin
       .from("virtual_queue")
       .select(
@@ -373,7 +333,47 @@ export async function calculateSupabaseQueueWaitTimes(
       )
       .eq("barbershop_id", barbershopId)
       .in("status", [...ACTIVE_QUEUE_STATUSES])
-      .order("joined_at", { ascending: true }),
+      .order("joined_at", { ascending: true });
+
+  let staffRows: StaffRow[] = [];
+  let staffIds: string[] = [];
+
+  // Quando há um ticket existente, preservamos a consulta completa de equipe.
+  // Para um visitante novo, primeiro verificamos configuração e expediente;
+  // se a fila já estiver inviável, a consulta de profissionais pode ser evitada.
+  if (!includePublicPreview) {
+    const { data: staffData, error: staffError } = await admin
+      .from("staff")
+      .select("id, full_name, is_active, accepting_queue")
+      .eq("barbershop_id", barbershopId)
+      .eq("role", "barber");
+
+    if (staffError) {
+      console.error(
+        "[SupabaseQueueWaitTimeService] Erro ao buscar profissionais:",
+        staffError.message
+      );
+
+      throw new Error(
+        "Não foi possível consultar os profissionais da barbearia."
+      );
+    }
+
+    staffRows = (staffData ?? []) as unknown as StaffRow[];
+    staffIds = staffRows.map((staff) => staff.id);
+  }
+
+  // 1. Consulta configurações, horários gerais e, para tickets existentes, tickets.
+  const [settingsResult, ticketsResult, businessHoursResult] = await Promise.all([
+    admin
+      .from("barbershop_settings")
+      .select(
+        "accepts_walk_in, default_queue_duration_minutes, queue_acceptance_policy"
+      )
+      .eq("barbershop_id", barbershopId)
+      .maybeSingle(),
+
+    includePublicPreview ? Promise.resolve(null) : loadQueueTickets(),
 
     admin
       .from("barbershop_business_hours")
@@ -393,7 +393,7 @@ export async function calculateSupabaseQueueWaitTimes(
     );
   }
 
-  if (ticketsResult.error) {
+  if (ticketsResult?.error) {
     console.error(
       "[SupabaseQueueWaitTimeService] Erro ao buscar tickets:",
       ticketsResult.error.message
@@ -419,8 +419,8 @@ export async function calculateSupabaseQueueWaitTimes(
     | BarbershopSettingsRow
     | null;
 
-  const ticketsData = (
-    ticketsResult.data ?? []
+  let ticketsData = (
+    ticketsResult?.data ?? []
   ) as unknown as QueueTicketRow[];
 
   const businessHoursRows = (
@@ -450,6 +450,93 @@ export async function calculateSupabaseQueueWaitTimes(
   );
   const allowQueueToContinueAfterClosing =
     queueAcceptancePolicy === "accept_until_closing";
+
+  // Para visitantes novos, as verificações abaixo evitam carregar horários
+  // individuais, bloqueios, tickets e executar o estimador quando a fila
+  // não pode receber novas entradas. Tickets válidos usam includePublicPreview=false
+  // e seguem pelo fluxo completo de acompanhamento.
+  let preflightSchedule: ReturnType<typeof buildQueueAvailability> | null = null;
+
+  if (includePublicPreview && !barbershopAcceptsQueue) {
+    return createUnavailablePreflightResult({
+      barbershopId,
+      now: nowDate,
+      timeZone,
+      barbershopAcceptsQueue,
+      defaultQueueDurationMinutes,
+      status: "queue_unavailable",
+      reason: "queue_disabled",
+      businessHoursConfigured: businessHours.length > 0,
+    });
+  }
+
+  if (includePublicPreview && businessHours.length === 0) {
+    return createUnavailablePreflightResult({
+      barbershopId,
+      now: nowDate,
+      timeZone,
+      barbershopAcceptsQueue,
+      defaultQueueDurationMinutes,
+      status: "queue_unavailable",
+      reason: "business_hours_not_configured",
+      businessHoursConfigured: false,
+    });
+  }
+
+  if (includePublicPreview) {
+    // Consulta somente o expediente geral para saber se a barbearia está
+    // fechada. Não carregamos horários dos profissionais nem simulamos tickets.
+    preflightSchedule = buildQueueAvailability({
+      now: nowDate,
+      timeZone,
+      daysAhead,
+      barbershopAcceptsQueue,
+      barbers: [],
+      minimumServiceDurationMinutes: defaultQueueDurationMinutes,
+      allowQueueToContinueAfterClosing,
+      business_hours: businessHours,
+    });
+
+    if (preflightSchedule.scheduleStatus.businessOpenNow === false) {
+      return createUnavailablePreflightResult({
+        barbershopId,
+        now: nowDate,
+        timeZone,
+        barbershopAcceptsQueue,
+        defaultQueueDurationMinutes,
+        status: "barbershop_closed",
+        reason: "barbershop_closed",
+        businessHoursConfigured: preflightSchedule.scheduleStatus.businessHoursConfigured,
+        businessOpenNow: preflightSchedule.scheduleStatus.businessOpenNow,
+        nextBusinessOpeningAt: preflightSchedule.scheduleStatus.nextBusinessOpeningAt,
+        businessClosesAt: preflightSchedule.scheduleStatus.businessClosesAt,
+      });
+    }
+  }
+
+  if (includePublicPreview) {
+    // Só consultamos os profissionais depois de confirmar que a fila está
+    // habilitada, há expediente geral e a barbearia está aberta.
+    const { data: staffData, error: staffError } = await admin
+      .from("staff")
+      .select("id, full_name, is_active, accepting_queue")
+      .eq("barbershop_id", barbershopId)
+      .eq("role", "barber");
+
+    if (staffError) {
+      console.error(
+        "[SupabaseQueueWaitTimeService] Erro ao buscar profissionais:",
+        staffError.message
+      );
+
+      throw new Error(
+        "Não foi possível consultar os profissionais da barbearia."
+      );
+    }
+
+    staffRows = (staffData ?? []) as unknown as StaffRow[];
+    staffIds = staffRows.map((staff) => staff.id);
+  }
 
   // 3. Busca expediente semanal e bloqueios.
   let workingHoursRows: WorkingHourRow[] = [];
@@ -516,6 +603,58 @@ export async function calculateSupabaseQueueWaitTimes(
     ) as unknown as TimeBlockRow[];
   }
 
+  if (includePublicPreview) {
+    const staffById = new Map(staffRows.map((staff) => [staff.id, staff]));
+    const activeQueueScheduleRows = workingHoursRows.filter((row) => {
+      const staff = staffById.get(row.staff_id);
+
+      return Boolean(
+        staff?.is_active &&
+        row.is_active &&
+        (row.service_mode === "queue" || row.service_mode === "hybrid")
+      );
+    });
+
+    const fallbackScheduleStatus = preflightSchedule?.scheduleStatus;
+
+    if (activeQueueScheduleRows.length === 0) {
+      return createUnavailablePreflightResult({
+        barbershopId,
+        now: nowDate,
+        timeZone,
+        barbershopAcceptsQueue,
+        defaultQueueDurationMinutes,
+        status: "queue_unavailable",
+        reason: "no_queue_professionals_configured",
+        businessHoursConfigured: fallbackScheduleStatus?.businessHoursConfigured ?? true,
+        businessOpenNow: fallbackScheduleStatus?.businessOpenNow ?? true,
+        nextBusinessOpeningAt: fallbackScheduleStatus?.nextBusinessOpeningAt,
+        businessClosesAt: fallbackScheduleStatus?.businessClosesAt,
+      });
+    }
+
+    const acceptingQueueScheduleRows = activeQueueScheduleRows.filter((row) => {
+      const staff = staffById.get(row.staff_id);
+      return staff?.accepting_queue !== false;
+    });
+
+    if (acceptingQueueScheduleRows.length === 0) {
+      return createUnavailablePreflightResult({
+        barbershopId,
+        now: nowDate,
+        timeZone,
+        barbershopAcceptsQueue,
+        defaultQueueDurationMinutes,
+        status: "professionals_off_shift",
+        reason: "no_queue_professionals_accepting",
+        businessHoursConfigured: fallbackScheduleStatus?.businessHoursConfigured ?? true,
+        businessOpenNow: fallbackScheduleStatus?.businessOpenNow ?? true,
+        nextBusinessOpeningAt: fallbackScheduleStatus?.nextBusinessOpeningAt,
+        businessClosesAt: fallbackScheduleStatus?.businessClosesAt,
+      });
+    }
+  }
+
   // 4. Agrupa os expedientes por profissional.
   const workingHoursByStaff = new Map<
     string,
@@ -580,6 +719,65 @@ export async function calculateSupabaseQueueWaitTimes(
     // Isso mantém compatibilidade com barbearias ainda sem configuração.
     business_hours: businessHours.length > 0 ? businessHours : undefined,
   });
+
+  if (
+    includePublicPreview &&
+    availability.scheduleStatus.professionalsAvailableNow === 0
+  ) {
+    let capacityUnavailable = false;
+
+    if (queueAcceptancePolicy === "restrict_by_capacity") {
+      const capacityCheckAvailability = buildQueueAvailability({
+        now: nowDate,
+        timeZone,
+        daysAhead,
+        barbershopAcceptsQueue,
+        barbers: barberSources,
+        minimumServiceDurationMinutes: 1,
+        allowQueueToContinueAfterClosing,
+        business_hours: businessHours,
+      });
+
+      capacityUnavailable =
+        capacityCheckAvailability.scheduleStatus.professionalsAvailableNow > 0;
+    }
+
+    return createUnavailablePreflightResult({
+      barbershopId,
+      now: nowDate,
+      timeZone,
+      barbershopAcceptsQueue,
+      defaultQueueDurationMinutes,
+      status: capacityUnavailable ? "no_availability" : "professionals_off_shift",
+      reason: capacityUnavailable
+        ? "capacity_unavailable"
+        : "no_professionals_available_now",
+      businessHoursConfigured: availability.scheduleStatus.businessHoursConfigured,
+      businessOpenNow: availability.scheduleStatus.businessOpenNow,
+      nextBusinessOpeningAt: availability.scheduleStatus.nextBusinessOpeningAt,
+      businessClosesAt: availability.scheduleStatus.businessClosesAt,
+    });
+  }
+
+  // O ticket de preview só é calculado se o estabelecimento e ao menos um
+  // profissional puderem receber novas entradas agora. Para tickets existentes,
+  // a consulta foi carregada no início e a previsão individual é preservada.
+  if (includePublicPreview && !ticketsResult) {
+    const deferredTicketsResult = await loadQueueTickets();
+
+    if (deferredTicketsResult.error) {
+      console.error(
+        "[SupabaseQueueWaitTimeService] Erro ao buscar tickets:",
+        deferredTicketsResult.error.message
+      );
+
+      throw new Error(
+        "Não foi possível consultar os tickets da fila."
+      );
+    }
+
+    ticketsData = (deferredTicketsResult.data ?? []) as unknown as QueueTicketRow[];
+  }
 
   // 7. Normaliza os tickets para o modelo do estimador.
   const queueTickets: QueueTicketInput[] = ticketsData.map((ticket) => {
@@ -668,24 +866,10 @@ export async function calculateSupabaseQueueWaitTimes(
         getLocalDateKeyInTimeZone(nowDate, timeZone)
   );
 
-  // Se a previsão restritiva não cabe no dia operacional atual, a próxima
-  // disponibilidade informativa deve apontar para uma janela futura do
-  // expediente, sem transformar o horário até essa data em minutos de espera.
-  const skipCurrentLocalDayForNextAvailability =
-    includePublicPreview &&
-    queueAcceptancePolicy === "restrict_by_capacity" &&
-    (!previewEstimate?.estimatedStartAt || previewStartsOnAnotherLocalDay);
-
-  const nextAvailableAt = barbershopAcceptsQueue
-    ? findNextProfessionalAvailabilityAt(
-        availability.barbers,
-        nowDate,
-        timeZone,
-        defaultQueueDurationMinutes,
-        queueAcceptancePolicy,
-        skipCurrentLocalDayForNextAvailability
-      )
-    : null;
+  // A próxima abertura é obtida dos horários gerais da barbearia.
+  // Não calculamos a próxima janela de atendimento de cada profissional.
+  const nextAvailableAt = scheduleStatus.nextBusinessOpeningAt;
+  let publicAvailabilityReason: PublicQueueAvailabilityReasonCode = null;
 
   // A situação da barbearia tem prioridade sobre o horário da equipe.
   // Na política restritiva, uma entrada pública só é aceita quando a
@@ -695,26 +879,33 @@ export async function calculateSupabaseQueueWaitTimes(
     scheduleStatus.businessOpenNow === false
   ) {
     publicAvailabilityStatus = "barbershop_closed";
+    publicAvailabilityReason = "barbershop_closed";
   } else if (!barbershopAcceptsQueue) {
     publicAvailabilityStatus = "queue_unavailable";
+    publicAvailabilityReason = "queue_disabled";
   } else if (
     includePublicPreview &&
     queueAcceptancePolicy === "restrict_by_capacity" &&
     (!previewEstimate?.estimatedStartAt || previewStartsOnAnotherLocalDay)
   ) {
     publicAvailabilityStatus = "no_availability";
+    publicAvailabilityReason = "capacity_unavailable";
   } else if (scheduleStatus.professionalsAvailableNow === 0) {
     publicAvailabilityStatus = previewEstimate?.estimatedStartAt
       ? "professionals_off_shift"
       : "no_availability";
+    publicAvailabilityReason = "no_professionals_available_now";
   } else if (!previewEstimate?.estimatedStartAt && includePublicPreview) {
     publicAvailabilityStatus = "no_availability";
+    publicAvailabilityReason = "no_preview_estimate";
   } else {
     publicAvailabilityStatus = "available";
+    publicAvailabilityReason = null;
   }
 
   const publicAvailability: PublicQueueAvailabilityStatus = {
     status: publicAvailabilityStatus,
+    reason: publicAvailabilityReason,
     businessHoursConfigured: scheduleStatus.businessHoursConfigured,
     businessOpenNow: scheduleStatus.businessOpenNow,
     nextBusinessOpeningAt: scheduleStatus.nextBusinessOpeningAt,

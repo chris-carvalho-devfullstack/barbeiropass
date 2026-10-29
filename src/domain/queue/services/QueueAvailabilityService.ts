@@ -118,8 +118,9 @@ interface TimeInterval {
   endMs: number;
 }
 
-const DEFAULT_HORIZON_DAYS = 14;
-const MAX_HORIZON_DAYS = 31;
+const DEFAULT_HORIZON_DAYS = 1;
+const MAX_HORIZON_DAYS = 1;
+const NEXT_BUSINESS_OPENING_LOOKAHEAD_DAYS = 7;
 
 const QUEUE_SERVICE_MODES = new Set<string>([
   "queue",
@@ -431,12 +432,15 @@ function calculateBusinessScheduleStatus(
     }
   }
 
-  // Sempre calculamos a próxima abertura futura, mesmo enquanto a barbearia
-  // está aberta. Isso permite informar a abertura do próximo dia quando a fila
-  // parar de aceitar novas entradas por capacidade antes do fechamento atual.
+  // A próxima abertura é obtida exclusivamente do expediente semanal
+  // da barbearia. Não é necessário gerar janelas futuras dos profissionais.
   let nextBusinessOpeningAt: string | null = null;
 
-  for (let dayOffset = 0; dayOffset <= daysAhead; dayOffset++) {
+  for (
+    let dayOffset = 0;
+    dayOffset <= Math.max(daysAhead, NEXT_BUSINESS_OPENING_LOOKAHEAD_DAYS);
+    dayOffset++
+  ) {
     const dateKey = addCalendarDays(todayKey, dayOffset);
     const dayOfWeek = getDayOfWeek(dateKey);
     const schedule = businessHoursByDay.get(dayOfWeek);
